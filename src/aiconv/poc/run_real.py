@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+from pathlib import Path
 
 from ..adapters.llm_claude import ClaudeLLM
 from ..adapters.stt_deepgram import DeepgramSTT
@@ -24,6 +25,22 @@ from ..core.orchestrator import ConversationOrchestrator, OrchestratorConfig
 from ..core.ports import VoiceLicense
 
 _REQUIRED_KEYS = ("ANTHROPIC_API_KEY", "DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY")
+
+# キーは ~/.*_token (perms 600) に格納する方式 (env が優先、未設定時のみ補完)。
+_TOKEN_FILES = {
+    "ANTHROPIC_API_KEY": "~/.anthropic_token",
+    "DEEPGRAM_API_KEY": "~/.deepgram_token",
+    "ELEVENLABS_API_KEY": "~/.elevenlabs_token",
+}
+
+
+def load_token_files() -> None:
+    for var, path in _TOKEN_FILES.items():
+        if os.environ.get(var):
+            continue
+        p = Path(path).expanduser()
+        if p.is_file():
+            os.environ[var] = p.read_text(encoding="utf-8").strip()
 
 
 class StdoutAudit:
@@ -44,6 +61,7 @@ async def main() -> None:
     parser.add_argument("--system", dest="system", default="あなたは親しみやすい相棒。")
     args = parser.parse_args()
 
+    load_token_files()
     if missing := missing_keys():
         raise SystemExit(f"必要な API キーが未設定: {', '.join(missing)}")
 
