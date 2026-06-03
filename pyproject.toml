@@ -48,3 +48,8 @@ python_version = "3.12"
 strict = true
 packages = ["aiconv"]
 mypy_path = "src"
+
+# 実プロバイダ SDK は optional extras。未導入環境でも型チェックが通るようにする。
+[[tool.mypy.overrides]]
+module = ["anthropic.*", "elevenlabs.*", "deepgram.*"]
+ignore_missing_imports = true
