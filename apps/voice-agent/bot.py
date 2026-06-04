@@ -69,8 +69,10 @@ PERSONA = os.getenv("PERSONA_PROMPT") or (
 AGENT_NAME = os.getenv("AGENT_NAME") or "あい"  # Daily 表示名
 SCENARIO = os.getenv("SCENARIO") or ""  # 目標駆動 improv。設定時は system に追記 (interlocutor 用)
 SYSTEM_INSTRUCTION = PERSONA + (f"\n\n# シナリオ・目標\n{SCENARIO}" if SCENARIO else "")
-KICKOFF = os.getenv("KICKOFF", "1") != "0"  # 接続時に自分から話し始めるか
+KICKOFF = os.getenv("KICKOFF", "1") != "0"  # RTVI client 接続時に話し始めるか (ブラウザ用)
 KICKOFF_PROMPT = os.getenv("KICKOFF_PROMPT") or "まず一言で自己紹介して。"
+# bot-to-bot 用: 参加者 join を口火に発話 (あい既定 0 で無影響。interlocutor で 1)
+KICKOFF_ON_JOIN = os.getenv("KICKOFF_ON_JOIN", "0") != "0"
 
 # 自作差別化: 応答生成の開始時に相づち/フィラーを即発話し、LLM/TTS の待ち時間を埋める。
 # ★現状 pipeline には未接続 (次増分で接続予定)。TTSSpeakFrame なので声優ボイスのまま・
@@ -156,6 +158,15 @@ async def run_bot(transport: BaseTransport) -> None:
         # (codex P2) は既知だが、TTSSpeakFrame 化は応答不能の回帰を招いたため保留中。
         if not KICKOFF:
             return
+        context.add_message({"role": "developer", "content": KICKOFF_PROMPT})
+        await worker.queue_frames([LLMRunFrame()])
+
+    @transport.event_handler("on_first_participant_joined")
+    async def on_first_participant_joined(transport: BaseTransport, participant: object) -> None:
+        # bot-to-bot: 相手 (あい) が居る/入ってきたら口火を切る (KICKOFF_ON_JOIN 時のみ)
+        if not KICKOFF_ON_JOIN:
+            return
+        logger.info("participant joined → kickoff")
         context.add_message({"role": "developer", "content": KICKOFF_PROMPT})
         await worker.queue_frames([LLMRunFrame()])
 
