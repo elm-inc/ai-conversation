@@ -13,7 +13,13 @@ import os
 from dotenv import load_dotenv
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import LLMRunFrame
+from pipecat.frames.frames import (
+    Frame,
+    LLMEnablePromptCachingFrame,
+    LLMFullResponseStartFrame,
+    LLMRunFrame,
+    TTSSpeakFrame,
+)
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -21,6 +27,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.runner.types import DailyRunnerArguments, RunnerArguments
 from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.services.deepgram.stt import DeepgramSTTService, LiveOptions
@@ -44,6 +51,28 @@ PERSONA = os.getenv("PERSONA_PROMPT") or (
     "読み上げられるので、絵文字・顔文字・記号の羅列・箇条書き・URL は出さず、"
     "1〜2文で簡潔に、相手に話す余白を残します。"
 )
+
+# 自作差別化: 応答生成の開始時に相づち/フィラーを即発話し、LLM/TTS の待ち時間を埋める
+# (Phase 1「フィラーによるレイテンシ隠蔽」を Pipecat に接続)。TTSSpeakFrame なので声優ボイス
+# のまま・サンプルレート問題なし。append_to_context=False で会話履歴は汚さない。
+_FILLERS = ("えーと、", "うーん、", "そうだね、", "なるほど、")
+
+
+class FillerProcessor(FrameProcessor):
+    def __init__(self) -> None:
+        super().__init__()
+        self._i = 0
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        await self.push_frame(frame, direction)
+        # LLM が応答を開始した瞬間 = 本応答音声が来るまでの間。相づちで埋める。
+        if isinstance(frame, LLMFullResponseStartFrame) and direction == FrameDirection.DOWNSTREAM:
+            phrase = _FILLERS[self._i % len(_FILLERS)]
+            self._i += 1
+            await self.push_frame(
+                TTSSpeakFrame(phrase, append_to_context=False), FrameDirection.DOWNSTREAM
+            )
 
 
 async def run_bot(transport: BaseTransport) -> None:
@@ -82,6 +111,7 @@ async def run_bot(transport: BaseTransport) -> None:
             stt,
             user_aggregator,
             llm,
+            FillerProcessor(),
             tts,
             transport.output(),
             assistant_aggregator,
@@ -97,7 +127,8 @@ async def run_bot(transport: BaseTransport) -> None:
     @worker.rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi: object) -> None:
         context.add_message({"role": "developer", "content": "まず一言で自己紹介して。"})
-        await worker.queue_frames([LLMRunFrame()])
+        # prompt caching を有効化 (persona/履歴をキャッシュし TTFT を下げる)
+        await worker.queue_frames([LLMEnablePromptCachingFrame(enable=True), LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport: BaseTransport, client: object) -> None:
