@@ -16,7 +16,6 @@ from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
     Frame,
     LLMFullResponseStartFrame,
-    LLMRunFrame,
     TTSSpeakFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
@@ -64,9 +63,9 @@ PERSONA = os.getenv("PERSONA_PROMPT") or (
     "1〜2文で簡潔に、相手に話す余白を残します。"
 )
 
-# 自作差別化: 応答生成の開始時に相づち/フィラーを即発話し、LLM/TTS の待ち時間を埋める
-# (Phase 1「フィラーによるレイテンシ隠蔽」を Pipecat に接続)。TTSSpeakFrame なので声優ボイス
-# のまま・サンプルレート問題なし。append_to_context=False で会話履歴は汚さない。
+# 自作差別化: 応答生成の開始時に相づち/フィラーを即発話し、LLM/TTS の待ち時間を埋める。
+# ★現状 pipeline には未接続 (次増分で接続予定)。TTSSpeakFrame なので声優ボイスのまま・
+# サンプルレート問題なし。append_to_context=False で会話履歴は汚さない。
 _FILLERS = ("えーと、", "うーん、", "そうだね、", "なるほど、")
 
 
@@ -142,8 +141,11 @@ async def run_bot(transport: BaseTransport) -> None:
 
     @worker.rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi: object) -> None:
-        context.add_message({"role": "developer", "content": "まず一言で自己紹介して。"})
-        await worker.queue_frames([LLMRunFrame()])
+        # 静的な挨拶。developer 指示を永続 context に残すと以降のターンに影響する
+        # (codex レビュー指摘) ため、LLM を介さず TTSSpeakFrame で話し、assistant 発話として記録。
+        await worker.queue_frames(
+            [TTSSpeakFrame("こんにちは、あいだよ。今日はどうしたの？", append_to_context=True)]
+        )
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport: BaseTransport, client: object) -> None:
