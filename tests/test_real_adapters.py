@@ -51,7 +51,7 @@ async def test_wav_transport_roundtrip(tmp_path: Path) -> None:
         w.setframerate(16_000)
         w.writeframes(b"\x00\x00" * 1_600)
 
-    transport = WavFileTransport(str(src), str(dst), frame_ms=20)
+    transport = WavFileTransport(str(src), str(dst), frame_ms=20, realtime=False)
     total = 0
     async for frame in transport.inbound():
         total += len(frame.data)

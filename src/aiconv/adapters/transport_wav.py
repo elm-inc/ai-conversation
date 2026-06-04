@@ -9,6 +9,7 @@ Pipecat による本番 WebRTC トランスポートは別アダプタ (transpor
 
 from __future__ import annotations
 
+import asyncio
 import wave
 from collections.abc import AsyncIterator
 
@@ -22,10 +23,15 @@ class WavFileTransport:
         out_path: str | None = None,
         *,
         frame_ms: int = 20,
+        realtime: bool = True,
     ) -> None:
         self.in_path = in_path
         self.out_path = out_path
         self.frame_ms = frame_ms
+        # ライブのマイク入力を模擬し、フレームを実時間ペースで流す。
+        # ストリーミング STT は実時間到来を前提に終端判定するため、これが無いと
+        # 先頭欠落・終端誤判定を起こす。遅延計測も実時間で意味を持つ。
+        self.realtime = realtime
         self.played: list[AudioFrame] = []
         self._out_fmt: AudioFormat | None = None
 
@@ -44,6 +50,8 @@ class WavFileTransport:
                     break
                 yield AudioFrame(data=data, ts_ms=seq * self.frame_ms, seq=seq, fmt=fmt)
                 seq += 1
+                if self.realtime:
+                    await asyncio.sleep(self.frame_ms / 1000.0)
 
     async def play(self, frame: AudioFrame) -> None:
         self._out_fmt = self._out_fmt or frame.fmt
