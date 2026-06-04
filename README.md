@@ -22,12 +22,17 @@ src/aiconv/
   adapters/
     mock.py          # オフライン PoC 用 mock 一式
     turn.py          # 素朴な無音ターン検出 (Phase 1 で semantic 化)
-    stt_deepgram.py  # 実プロバイダ skeleton (env-gated, 健全性ゲート付き)
-    llm_claude.py    # 〃 (prompt caching 予定)
-    tts_elevenlabs.py# 〃 (声優ボイス + 許諾ガード/監査ログ)
-    transport_pipecat.py
-  poc/run_loop.py    # mock で end-to-end を回しレイテンシ表示
+    stt_deepgram.py  # Deepgram v7 live (健全性ゲート付き)
+    llm_claude.py    # Claude streaming + prompt caching
+    tts_elevenlabs.py# ElevenLabs Flash (声優ボイス + 許諾ガード/監査ログ)
+    transport_wav.py # ローカル WAV トランスポート (実ベースライン計測用)
+    transport_pipecat.py  # 本番 WebRTC (front-end 完成後に実装)
+  poc/
+    run_loop.py      # mock で end-to-end (オフライン)
+    run_real.py      # 実プロバイダで end-to-end + 実ベースライン遅延
 ```
+
+実アダプタは SDK を遅延 import するので、`--extra providers` 無しでもコアと mock は動く。
 
 ### セットアップ & 実行 (uv)
 
@@ -38,8 +43,16 @@ uv run pytest                        # テスト
 uv run ruff check . && uv run mypy   # lint + 型
 ```
 
-実プロバイダ (Deepgram/Claude/ElevenLabs/Pipecat) は `uv sync --extra providers --extra transport`
-で導入し、各アダプタ skeleton を実装して差し替える (AIC-1 次段)。
+### 実プロバイダで実ベースライン計測
+
+```bash
+uv sync --extra providers
+export ANTHROPIC_API_KEY=... DEEPGRAM_API_KEY=... ELEVENLABS_API_KEY=...
+uv run python -m aiconv.poc.run_real --in input.wav --out reply.wav --voice <ELEVENLABS_VOICE_ID>
+```
+
+声優音源を使うため `run_real` は `VoiceLicense` (許諾範囲) と `AuditSink` (監査ログ) を必ず通す。
+本番 WebRTC は `transport_pipecat` を front-end 完成後に実装する。
 
 ### 設計上の不変条件
 
