@@ -16,6 +16,7 @@ from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
     Frame,
     LLMFullResponseStartFrame,
+    LLMRunFrame,
     TTSSpeakFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
@@ -141,11 +142,10 @@ async def run_bot(transport: BaseTransport) -> None:
 
     @worker.rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi: object) -> None:
-        # 静的な挨拶。developer 指示を永続 context に残すと以降のターンに影響する
-        # (codex レビュー指摘) ため、LLM を介さず TTSSpeakFrame で話し、assistant 発話として記録。
-        await worker.queue_frames(
-            [TTSSpeakFrame("こんにちは、あいだよ。今日はどうしたの？", append_to_context=True)]
-        )
+        # 挨拶を LLM 生成。NOTE: developer 指示が context に残る軽微な問題 (codex P2) は既知だが、
+        # TTSSpeakFrame 化を試みたら応答不能の回帰を招いたため、ローカル検証可能になるまで保留する。
+        context.add_message({"role": "developer", "content": "まず一言で自己紹介して。"})
+        await worker.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport: BaseTransport, client: object) -> None:
