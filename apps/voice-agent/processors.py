@@ -1,4 +1,9 @@
-"""自作の日本語ターンテイキングを Pipecat の FrameProcessor として再利用する。
+"""[STAGED — 次増分] 自作の日本語ターンテイキングを Pipecat の FrameProcessor として再利用する。
+
+★MVP の bot.py には未接続。接続時は (1) aiconv をイメージに入れる
+  (uv workspace で path 依存 or 純ロジックを vendoring)、(2) Dockerfile で本ファイルを COPY、
+  (3) pipeline の stt の直後に挿入する。まずはプラットフォーム疎通を優先し本段は次に回す。
+
 
 MVP では「観測 + ログ」段階: STT の転写フレームに対し我々の FusionTurnDetector を走らせ、
 ターン判定 (COMPLETE/INCOMPLETE/BACKCHANNEL/BARGE_IN) をログに出す。フレームは素通しする

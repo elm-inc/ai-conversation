@@ -1,38 +1,56 @@
-"""Pipecat Cloud ボット — Daily 全二重の日本語キャラクター対話 (MVP)。
+"""ai-conversation voice agent — 日本語キャラクター「あい」(Daily 全二重 / Pipecat Cloud)。
 
-パイプライン:
-  DailyTransport.input() → DeepgramSTT(ja) → JapaneseEndpointingProcessor(観測)
-   → user_aggregator → AnthropicLLM(persona) → ElevenLabsTTS(声優voice)
-   → DailyTransport.output() → assistant_aggregator
-+ Silero VAD (発話区間検出) / Pipecat の割り込み制御 (allow_interruptions)
+cascade パイプライン: DeepgramSTT(ja) → AnthropicLLM(persona) → ElevenLabsTTS(声優voice)。
+Pipecat CLI の canonical テンプレート構造に準拠 (PipelineWorker / WorkerRunner /
+bot(runner_args) エントリ)。ローカル開発: `uv run bot.py --transport daily`。
 
-Pipecat Cloud は `bot(args: DailySessionArguments)` を呼び、Daily ルーム/トークンを渡す。
-ローカル開発は `pipecat.runner` 経由 (README 参照)。
+MVP はターンテイキングを Pipecat の VAD/割り込みに任せる。日本語 semantic endpointing
+(processors.JapaneseEndpointingProcessor / aiconv) の接続は次増分。
 """
-
-from __future__ import annotations
 
 import os
 
+from dotenv import load_dotenv
 from loguru import logger
-from persona import LLM_MODEL, PERSONA, STT_LANGUAGE, STT_MODEL, TTS_MODEL, VOICE_ID
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineParams, PipelineTask
+from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
+)
+from pipecat.runner.types import DailyRunnerArguments, RunnerArguments
 from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.services.deepgram.stt import DeepgramSTTService, LiveOptions
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.daily.transport import DailyParams, DailyTransport
-from processors import JapaneseEndpointingProcessor
+from pipecat.workers.runner import WorkerRunner
+
+load_dotenv(override=True)
+
+LLM_MODEL = os.getenv("ANTHROPIC_MODEL") or "claude-sonnet-4-6"
+TTS_MODEL = os.getenv("TTS_MODEL") or "eleven_flash_v2_5"
+STT_MODEL = os.getenv("STT_MODEL") or "nova-2"
+STT_LANGUAGE = os.getenv("STT_LANGUAGE") or "ja"
+
+# 一貫した会話人格「あい」。音声で読み上げる前提 (絵文字/記号/箇条書きを出さない)。
+PERSONA = os.getenv("PERSONA_PROMPT") or (
+    "あなたは親しみやすい日本語の話し相手「あい」です。"
+    "砕けた自然な日本語で短めに話し、相手の話をまず受け止めてから返します。"
+    "知ったかぶりをせず、分からないことは素直に分からないと言います。"
+    "読み上げられるので、絵文字・顔文字・記号の羅列・箇条書き・URL は出さず、"
+    "1〜2文で簡潔に、相手に話す余白を残します。"
+)
 
 
-def _build_pipeline(transport: DailyTransport) -> PipelineTask:
+async def run_bot(transport: BaseTransport) -> None:
+    logger.info("Starting あい bot")
+
     stt = DeepgramSTTService(
-        api_key=os.environ["DEEPGRAM_API_KEY"],
+        api_key=os.getenv("DEEPGRAM_API_KEY"),
         live_options=LiveOptions(
             language=STT_LANGUAGE,
             model=STT_MODEL,
@@ -40,64 +58,78 @@ def _build_pipeline(transport: DailyTransport) -> PipelineTask:
             smart_format=True,
         ),
     )
-    llm = AnthropicLLMService(api_key=os.environ["ANTHROPIC_API_KEY"], model=LLM_MODEL)
+
     tts = ElevenLabsTTSService(
-        api_key=os.environ["ELEVENLABS_API_KEY"],
-        voice_id=VOICE_ID,
+        api_key=os.getenv("ELEVENLABS_API_KEY"),
         model=TTS_MODEL,
+        settings=ElevenLabsTTSService.Settings(voice=os.getenv("ELEVENLABS_VOICE_ID")),
     )
 
-    context = LLMContext(messages=[{"role": "system", "content": PERSONA}])
-    aggregator = LLMContextAggregatorPair(context)
+    llm = AnthropicLLMService(
+        api_key=os.getenv("ANTHROPIC_API_KEY"),
+        settings=AnthropicLLMService.Settings(model=LLM_MODEL, system_instruction=PERSONA),
+    )
+
+    context = LLMContext()
+    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
+        context,
+        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
+    )
 
     pipeline = Pipeline(
         [
             transport.input(),
             stt,
-            JapaneseEndpointingProcessor(),
-            aggregator.user(),
+            user_aggregator,
             llm,
             tts,
             transport.output(),
-            aggregator.assistant(),
+            assistant_aggregator,
         ]
     )
-    return PipelineTask(
+
+    worker = PipelineWorker(
         pipeline,
-        params=PipelineParams(allow_interruptions=True, enable_metrics=True),
+        params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
+        observers=[],
     )
 
+    @worker.rtvi.event_handler("on_client_ready")
+    async def on_client_ready(rtvi: object) -> None:
+        context.add_message({"role": "developer", "content": "まず一言で自己紹介して。"})
+        await worker.queue_frames([LLMRunFrame()])
 
-async def bot(args: object) -> None:
-    """Pipecat Cloud / runner のエントリポイント。args は DailySessionArguments。"""
-    if not VOICE_ID:
+    @transport.event_handler("on_client_disconnected")
+    async def on_client_disconnected(transport: BaseTransport, client: object) -> None:
+        logger.info("client disconnected, ending")
+        await worker.cancel()
+
+    runner = WorkerRunner(handle_sigint=False)
+    await runner.add_workers(worker)
+    await runner.run()
+
+
+async def bot(runner_args: RunnerArguments) -> None:
+    """Pipecat Cloud / runner エントリポイント。"""
+    if not os.getenv("ELEVENLABS_VOICE_ID"):
         raise RuntimeError("ELEVENLABS_VOICE_ID (声優 voice_id) が未設定です")
 
-    room_url = args.room_url  # type: ignore[attr-defined]
-    token = args.token  # type: ignore[attr-defined]
+    match runner_args:
+        case DailyRunnerArguments():
+            transport = DailyTransport(
+                runner_args.room_url,
+                runner_args.token,
+                "あい",
+                params=DailyParams(audio_in_enabled=True, audio_out_enabled=True),
+            )
+        case _:
+            logger.error(f"Unsupported runner arguments: {type(runner_args)}")
+            return
 
-    transport = DailyTransport(
-        room_url,
-        token,
-        "あい",
-        DailyParams(
-            audio_in_enabled=True,
-            audio_out_enabled=True,
-            vad_analyzer=SileroVADAnalyzer(),
-        ),
-    )
-    task = _build_pipeline(transport)
+    await run_bot(transport)
 
-    @transport.event_handler("on_first_participant_joined")
-    async def _on_join(transport: DailyTransport, participant: dict) -> None:
-        logger.info("participant joined: {}", participant.get("id"))
-        # 最初の挨拶を生成させる
-        await task.queue_frames([LLMRunFrame()])
 
-    @transport.event_handler("on_participant_left")
-    async def _on_left(transport: DailyTransport, participant: dict, reason: str) -> None:
-        logger.info("participant left ({}), ending", reason)
-        await task.cancel()
+if __name__ == "__main__":
+    from pipecat.runner.run import main
 
-    runner = PipelineRunner(handle_sigint=getattr(args, "handle_sigint", False))
-    await runner.run(task)
+    main()

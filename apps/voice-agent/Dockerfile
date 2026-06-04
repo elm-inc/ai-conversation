@@ -1,22 +1,15 @@
-# Pipecat Cloud ボットイメージ。
-# ★ build context はリポジトリルート (自作 aiconv を含めるため):
-#     docker build -f apps/voice-agent/Dockerfile -t <image> .
-#
-# ベースイメージは bot.py の bot() を実行する Pipecat Cloud ランナー入り。
-# 最新タグは Pipecat Cloud のドキュメントで確認すること。
+# Pipecat Cloud ボットイメージ (Pipecat CLI canonical テンプレート準拠)。
+# build context は apps/voice-agent。base image が /app/bot.py の bot() を実行する。
 FROM dailyco/pipecat-base:latest
 
-WORKDIR /app
+ENV UV_COMPILE_BYTECODE=1
+ENV UV_LINK_MODE=copy
 
-# Pipecat + サービス依存
-COPY apps/voice-agent/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# 自作ロジック (aiconv: 純 Python・外部依存なし) をインストール
-COPY pyproject.toml /tmp/aiconv/pyproject.toml
-COPY README.md /tmp/aiconv/README.md
-COPY src /tmp/aiconv/src
-RUN pip install --no-cache-dir /tmp/aiconv
+# 依存をロックファイルから解決
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    uv sync --locked --no-install-project --no-dev
 
 # ボット本体
-COPY apps/voice-agent/bot.py apps/voice-agent/persona.py apps/voice-agent/processors.py ./
+COPY ./bot.py bot.py

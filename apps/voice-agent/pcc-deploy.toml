@@ -1,14 +1,11 @@
-# Pipecat Cloud デプロイ設定 (`pcc deploy` が --config-file 既定で参照)。
-# キー名はバージョンで変わりうるので `pcc deploy --help` のフラグと対応を確認すること。
-
+# Pipecat Cloud デプロイ設定 (`pipecat cloud deploy` が --config-file 既定で参照)。
 agent_name = "ai-conversation-voice"
 
-# `pcc docker build-push` でビルド&push したイメージ参照に置き換える
-image = "REGISTRY/ai-conversation-voice:0.1"
+# `pipecat cloud secrets set ai-conversation-voice-secrets KEY=VALUE ...` で作る secret set
+secret_set = "ai-conversation-voice-secrets"
 
-# `pcc secrets set ai-conversation-secrets KEY=VALUE ...` で作成した secret set 名
-secrets = "ai-conversation-secrets"
+# エージェントプロファイル (リソースサイズ)。詳細は `pipecat cloud agent` / ダッシュボード
+agent_profile = "agent-1x"
 
 [scaling]
-min_agents = 0   # 検証中は 0 (コールド起動許容)。本番で常時温める場合は 1+
-max_agents = 1
+	min_agents = 0   # 検証中は 0 (コールド起動許容)。常時温める場合は 1+
