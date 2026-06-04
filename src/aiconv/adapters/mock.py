@@ -110,9 +110,18 @@ class MockTTS:
 
     capabilities = Capability(supports_interrupt=True, flush_latency_ms=20.0, notes="mock silence")
 
-    def __init__(self, *, ttfa_ms: float = 150.0, samples_per_frame: int = 160) -> None:
+    def __init__(
+        self,
+        *,
+        ttfa_ms: float = 150.0,
+        samples_per_frame: int = 160,
+        frames_per_chunk: int = 1,
+        frame_gap_ms: float = 0.0,
+    ) -> None:
         self.ttfa_ms = ttfa_ms
         self._silence = b"\x00\x00" * samples_per_frame
+        self.frames_per_chunk = frames_per_chunk
+        self.frame_gap_ms = frame_gap_ms
         self._interrupted = False
 
     async def synthesize(self, text_chunks: AsyncIterator[str]) -> AsyncIterator[AudioFrame]:
@@ -123,7 +132,12 @@ class MockTTS:
             if first:
                 await asyncio.sleep(self.ttfa_ms / 1000.0)
                 first = False
-            yield AudioFrame(data=self._silence, ts_ms=0.0)
+            for _ in range(self.frames_per_chunk):
+                if self._interrupted:
+                    break
+                yield AudioFrame(data=self._silence, ts_ms=0.0)
+                if self.frame_gap_ms:
+                    await asyncio.sleep(self.frame_gap_ms / 1000.0)
 
     async def interrupt(self) -> None:
         self._interrupted = True

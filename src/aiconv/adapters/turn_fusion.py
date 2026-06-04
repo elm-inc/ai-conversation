@@ -19,7 +19,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..core.endpointing import is_backchannel, is_filler_only, text_completion_score
+from ..core.endpointing import (
+    is_backchannel,
+    is_filler_only,
+    looks_like_interruption,
+    text_completion_score,
+)
 from ..core.events import Transcript, TurnDecision, TurnLabel
 
 
@@ -38,11 +43,30 @@ class FusionTurnDetector:
     def __init__(self, thresholds: FusionThresholds | None = None) -> None:
         self.th = thresholds or FusionThresholds()
 
-    def predict(self, partial: Transcript | None, *, silence_ms: float) -> TurnDecision:
+    def predict(
+        self,
+        partial: Transcript | None,
+        *,
+        silence_ms: float,
+        during_speech: bool = False,
+    ) -> TurnDecision:
         if partial is None or not partial.text.strip():
             return TurnDecision(TurnLabel.INCOMPLETE, prob=1.0)
 
         text = partial.text
+
+        # AI 発話中: 相槌は聞き流し、実質的な発話/割り込み語は BARGE_IN
+        if during_speech:
+            if is_backchannel(text) or is_filler_only(text):
+                return TurnDecision(TurnLabel.BACKCHANNEL, prob=0.9)
+            if (
+                looks_like_interruption(text)
+                or partial.endpoint_hint
+                or text_completion_score(text) >= self.th.yield_text
+            ):
+                return TurnDecision(TurnLabel.BARGE_IN, prob=0.85)
+            return TurnDecision(TurnLabel.INCOMPLETE, prob=0.6)
+
         # 相槌の単独短発話はターンを奪わない
         if is_backchannel(text):
             return TurnDecision(TurnLabel.BACKCHANNEL, prob=0.9)
