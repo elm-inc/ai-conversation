@@ -64,6 +64,14 @@ PERSONA = os.getenv("PERSONA_PROMPT") or (
     "1〜2文で簡潔に、相手に話す余白を残します。"
 )
 
+# --- 役割パラメータ (AIC-7: あい / interlocutor を同一コードで生やす) ---
+# すべて env 未設定時は「あい」の v0.4 既定と完全一致する。
+AGENT_NAME = os.getenv("AGENT_NAME") or "あい"  # Daily 表示名
+SCENARIO = os.getenv("SCENARIO") or ""  # 目標駆動 improv。設定時は system に追記 (interlocutor 用)
+SYSTEM_INSTRUCTION = PERSONA + (f"\n\n# シナリオ・目標\n{SCENARIO}" if SCENARIO else "")
+KICKOFF = os.getenv("KICKOFF", "1") != "0"  # 接続時に自分から話し始めるか
+KICKOFF_PROMPT = os.getenv("KICKOFF_PROMPT") or "まず一言で自己紹介して。"
+
 # 自作差別化: 応答生成の開始時に相づち/フィラーを即発話し、LLM/TTS の待ち時間を埋める。
 # ★現状 pipeline には未接続 (次増分で接続予定)。TTSSpeakFrame なので声優ボイスのまま・
 # サンプルレート問題なし。append_to_context=False で会話履歴は汚さない。
@@ -88,7 +96,7 @@ class FillerProcessor(FrameProcessor):
 
 
 async def run_bot(transport: BaseTransport) -> None:
-    logger.info("Starting あい bot")
+    logger.info("Starting {} bot", AGENT_NAME)
 
     stt = DeepgramSTTService(
         api_key=os.getenv("DEEPGRAM_API_KEY"),
@@ -113,7 +121,9 @@ async def run_bot(transport: BaseTransport) -> None:
 
     llm = AnthropicLLMService(
         api_key=os.getenv("ANTHROPIC_API_KEY"),
-        settings=AnthropicLLMService.Settings(model=LLM_MODEL, system_instruction=PERSONA),
+        settings=AnthropicLLMService.Settings(
+            model=LLM_MODEL, system_instruction=SYSTEM_INSTRUCTION
+        ),
     )
 
     context = LLMContext()
@@ -142,9 +152,11 @@ async def run_bot(transport: BaseTransport) -> None:
 
     @worker.rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi: object) -> None:
-        # 挨拶を LLM 生成。NOTE: developer 指示が context に残る軽微な問題 (codex P2) は既知だが、
-        # TTSSpeakFrame 化を試みたら応答不能の回帰を招いたため、ローカル検証可能になるまで保留する。
-        context.add_message({"role": "developer", "content": "まず一言で自己紹介して。"})
+        # kickoff 時のみ自分から話し始める。NOTE: developer 指示が context に残る軽微な問題
+        # (codex P2) は既知だが、TTSSpeakFrame 化は応答不能の回帰を招いたため保留中。
+        if not KICKOFF:
+            return
+        context.add_message({"role": "developer", "content": KICKOFF_PROMPT})
         await worker.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
@@ -167,7 +179,7 @@ async def bot(runner_args: RunnerArguments) -> None:
             transport = DailyTransport(
                 runner_args.room_url,
                 runner_args.token,
-                "あい",
+                AGENT_NAME,
                 params=DailyParams(audio_in_enabled=True, audio_out_enabled=True),
             )
         case _:
