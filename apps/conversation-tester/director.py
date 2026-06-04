@@ -31,9 +31,8 @@ YUU_SCENARIO = (
     "目標: ①軽い挨拶と近況 ②週末の予定の話題を振る ③途中で自然に天気の話へ移る "
     "④相手の答えに共感や軽い質問を返す。不自然に終わらせず会話を続ける。"
 )
-# NOTE: ユーザー提供の Raa94hHxcH2itBN60mKp は ElevenLabs に存在せず TTS 失敗したため、
-# 当面あいと同じ動く voice で会話成立を検証。有効な別 voice_id を貰い次第差し替える。
-YUU_VOICE_ID = "c2XJrw7TvNGtOc6r0ijG"
+# ゆうの声。Library voice は My Voices に追加されていれば websocket TTS でも使える。
+YUU_VOICE_ID = "Raa94hHxcH2itBN60mKp"
 
 
 def _tok(name: str) -> str:
