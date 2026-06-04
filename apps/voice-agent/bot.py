@@ -38,9 +38,22 @@ from pipecat.workers.runner import WorkerRunner
 load_dotenv(override=True)
 
 LLM_MODEL = os.getenv("ANTHROPIC_MODEL") or "claude-sonnet-4-6"
-TTS_MODEL = os.getenv("TTS_MODEL") or "eleven_flash_v2_5"
+# 高品質モデル (抑揚が自然)。低遅延優先なら eleven_flash_v2_5。secret で上書き可。
+TTS_MODEL = os.getenv("TTS_MODEL") or "eleven_multilingual_v2"
 STT_MODEL = os.getenv("STT_MODEL") or "nova-2"
 STT_LANGUAGE = os.getenv("STT_LANGUAGE") or "ja"
+
+
+def _env_float(name: str, default: float) -> float:
+    v = os.getenv(name)
+    return float(v) if v else default
+
+
+# 声の一貫性 (発話毎のトーン/音量ブレ抑制)。stability 高いほど安定だが平板になりやすい (中庸推奨)。
+# secret で上書きできるので、リビルド無しで振れる。
+TTS_STABILITY = _env_float("TTS_STABILITY", 0.5)
+TTS_SIMILARITY = _env_float("TTS_SIMILARITY", 0.8)
+TTS_SPEAKER_BOOST = os.getenv("TTS_SPEAKER_BOOST", "1") != "0"
 
 # 一貫した会話人格「あい」。音声で読み上げる前提 (絵文字/記号/箇条書きを出さない)。
 PERSONA = os.getenv("PERSONA_PROMPT") or (
@@ -90,7 +103,12 @@ async def run_bot(transport: BaseTransport) -> None:
     tts = ElevenLabsTTSService(
         api_key=os.getenv("ELEVENLABS_API_KEY"),
         model=TTS_MODEL,
-        settings=ElevenLabsTTSService.Settings(voice=os.getenv("ELEVENLABS_VOICE_ID")),
+        settings=ElevenLabsTTSService.Settings(
+            voice=os.getenv("ELEVENLABS_VOICE_ID"),
+            stability=TTS_STABILITY,
+            similarity_boost=TTS_SIMILARITY,
+            use_speaker_boost=TTS_SPEAKER_BOOST,
+        ),
     )
 
     llm = AnthropicLLMService(
