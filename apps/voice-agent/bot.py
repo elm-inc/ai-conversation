@@ -169,6 +169,10 @@ async def run_bot(transport: BaseTransport) -> None:
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport: BaseTransport, client: object) -> None:
+        # NOTE (codex P2, 既知の制限): これは「任意の参加者離脱」の alias。あい単独ブラウザ用途では
+        # ユーザー離脱で即終了するのが正しい (孤児セッション/課金を防ぐ) が、bot-to-bot + 聴衆 join 時は
+        # 聴衆がタブを閉じただけで会話全体が止まる。聴衆コンテンツ (Phase D) 着手時に「残り参加者が
+        # 0 のときだけ終了」へ修正する (要 multi-party live 検証なので deploy→検証 を別サイクルで)。
         logger.info("client disconnected, ending")
         await worker.cancel()
 

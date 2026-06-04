@@ -49,7 +49,9 @@ def start_ai_room() -> tuple[str, str]:
         timeout=200,
     )
     joined = re.sub(r"\s+", "", res.stdout + res.stderr)
-    m = re.search(r"(https://[^\s]*?daily\.co/[A-Za-z0-9]+\?t=[A-Za-z0-9._-]+)", joined)
+    # room 名は英数字のほか hyphen/underscore を含みうる (Pipecat 生成 room は pipecat-<id> 形式)。
+    # codex P1: [A-Za-z0-9]+ だけだと hyphen 入り room を取りこぼし「room URL 取得失敗」で落ちる。
+    m = re.search(r"(https://[^\s]*?daily\.co/[A-Za-z0-9_-]+\?t=[A-Za-z0-9._-]+)", joined)
     if not m:
         print(res.stdout, res.stderr, file=sys.stderr)
         raise SystemExit("room URL を取得できませんでした")
