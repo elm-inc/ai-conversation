@@ -15,7 +15,13 @@ class SilenceTurnDetector:
     def __init__(self, *, threshold_ms: float = 600.0) -> None:
         self.threshold_ms = threshold_ms
 
-    def predict(self, partial: Transcript | None, *, silence_ms: float) -> TurnDecision:
+    def predict(
+        self,
+        partial: Transcript | None,
+        *,
+        silence_ms: float,
+        during_speech: bool = False,
+    ) -> TurnDecision:
         if partial is None or not partial.text.strip():
             return TurnDecision(TurnLabel.INCOMPLETE, prob=1.0, at_ms=None)
         label = TurnLabel.COMPLETE if silence_ms >= self.threshold_ms else TurnLabel.INCOMPLETE

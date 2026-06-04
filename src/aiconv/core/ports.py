@@ -89,9 +89,19 @@ class LLMProvider(Protocol):
 
 @runtime_checkable
 class TurnDetector(Protocol):
-    """(partial transcript, 無音長) → ターン判定。Phase 1 で semantic 化する。"""
+    """(partial transcript, 無音長) → ターン判定。Phase 1 で semantic 化する。
 
-    def predict(self, partial: Transcript | None, *, silence_ms: float) -> TurnDecision: ...
+    `during_speech=True` は AI 発話中の判定 (barge-in 用)。相槌は BACKCHANNEL、
+    実質的な割り込みは BARGE_IN を返す。
+    """
+
+    def predict(
+        self,
+        partial: Transcript | None,
+        *,
+        silence_ms: float,
+        during_speech: bool = False,
+    ) -> TurnDecision: ...
 
 
 @runtime_checkable
