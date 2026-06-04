@@ -1,0 +1,3 @@
+# Pipecat 本体 + Daily/STT/LLM/TTS/VAD サービス (1.3.0 で API 確認済み)
+pipecat-ai[daily,deepgram,anthropic,elevenlabs,silero]==1.3.0
+# 自作ロジック (aiconv) は Dockerfile でリポジトリからインストールする

@@ -1,0 +1,14 @@
+# Pipecat Cloud デプロイ設定 (`pcc deploy` が --config-file 既定で参照)。
+# キー名はバージョンで変わりうるので `pcc deploy --help` のフラグと対応を確認すること。
+
+agent_name = "ai-conversation-voice"
+
+# `pcc docker build-push` でビルド&push したイメージ参照に置き換える
+image = "REGISTRY/ai-conversation-voice:0.1"
+
+# `pcc secrets set ai-conversation-secrets KEY=VALUE ...` で作成した secret set 名
+secrets = "ai-conversation-secrets"
+
+[scaling]
+min_agents = 0   # 検証中は 0 (コールド起動許容)。本番で常時温める場合は 1+
+max_agents = 1
