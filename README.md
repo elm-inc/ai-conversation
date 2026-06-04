@@ -59,3 +59,17 @@ uv run python -m aiconv.poc.run_real --in input.wav --out reply.wav --voice <ELE
 応答音声は **発話終端 (TurnLabel.COMPLETE) 確定後のみ** 出力する。投機生成 (LLM ドラフト) は
 将来前倒ししてよいが、TTS への送出 = 発声は必ず終端確定ゲートを通す
 (設計レビュー反映: 確定前の投機音声をスピーカーに出さない)。
+
+## Phase 1 — ターンテイキング (AIC-2, 進行中)
+
+**融合 semantic endpointing** を実装。テキスト意味と音響シグナルの両 signal を統合する:
+
+- `core/endpointing.py` — 日本語の文末助詞/助詞止め/体言止め/フィラー/相槌から発話完結度をスコア
+- `adapters/turn_fusion.py` — `FusionTurnDetector`。テキストスコア + `endpoint_hint`(Deepgram speech_final を正規化) + 無音長 を融合し、競合時は優先度で裁定
+- `core/orchestrator.py` — LISTEN を **ストリーミング endpointing** 化。partial ごとに検出器へ問い、COMPLETE で確定。相槌 (BACKCHANNEL) はターンを奪わず聞き続ける
+
+判定例: 「〜だね」→ 即 COMPLETE / 「〜だけど」(助詞止め)+音響終端 → ターン放棄 COMPLETE /
+「えーと」→ INCOMPLETE / 「うん」→ BACKCHANNEL。
+
+残り (次増分): barge-in (全二重・割り込み復帰、要 Pipecat 全二重トランスポート)、
+相槌/フィラーによるレイテンシ隠蔽 (事前録音クリップ)。

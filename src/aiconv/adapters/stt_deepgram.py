@@ -85,13 +85,16 @@ class DeepgramSTT:
                     is_final = bool(message.is_final)
                     if not text and not is_final:
                         continue
+                    speech_final = bool(message.speech_final)
                     yield Transcript(
                         text=text,
                         is_final=is_final,
                         confidence=confidence,
                         health=classify_health(text, confidence),
+                        # 音響シグナルを正規化してコアへ (FusionTurnDetector が使う)
+                        endpoint_hint=speech_final,
                     )
-                    if message.speech_final:
+                    if speech_final:
                         break
             finally:
                 pump_task.cancel()
