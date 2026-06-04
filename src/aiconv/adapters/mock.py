@@ -55,6 +55,24 @@ class MockSTT:
         yield Transcript(self.text, is_final=True, confidence=0.95, health=self.health)
 
 
+class ScriptedSTT:
+    """事前に用意した Transcript 列を順に流す。ストリーミング endpointing のテスト用。"""
+
+    capabilities = Capability(streaming_partials=True, languages=("ja",), notes="scripted")
+
+    def __init__(self, transcripts: list[Transcript], *, gap_ms: float = 0.0) -> None:
+        self._transcripts = transcripts
+        self.gap_ms = gap_ms
+
+    async def transcribe(self, frames: AsyncIterator[AudioFrame]) -> AsyncIterator[Transcript]:
+        async for _ in frames:
+            pass
+        for tr in self._transcripts:
+            if self.gap_ms:
+                await asyncio.sleep(self.gap_ms / 1000.0)
+            yield tr
+
+
 class MockLLM:
     """固定応答を文字単位でストリーミングする (TTFT/トークン間隔を模擬)。"""
 

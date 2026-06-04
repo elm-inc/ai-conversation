@@ -20,7 +20,7 @@ from ..adapters.llm_claude import ClaudeLLM
 from ..adapters.stt_deepgram import DeepgramSTT
 from ..adapters.transport_wav import WavFileTransport
 from ..adapters.tts_elevenlabs import ElevenLabsTTS
-from ..adapters.turn import SilenceTurnDetector
+from ..adapters.turn_fusion import FusionTurnDetector
 from ..core.orchestrator import ConversationOrchestrator, OrchestratorConfig
 from ..core.ports import VoiceLicense
 
@@ -75,7 +75,7 @@ async def main() -> None:
             license=VoiceLicense(voice_id=args.voice_id, allow=lambda _text: True),
             audit=StdoutAudit(),
         ),
-        turn_detector=SilenceTurnDetector(),
+        turn_detector=FusionTurnDetector(),
         transport=transport,
         config=OrchestratorConfig(system_prompt=args.system),
     )

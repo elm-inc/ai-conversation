@@ -58,6 +58,10 @@ class Transcript:
     start_ms: float | None = None
     end_ms: float | None = None
     health: TranscriptHealth = TranscriptHealth.OK
+    # 音響シグナル: プロバイダが「発話が終わった」と判断したヒント。
+    # アダプタがベンダー固有信号 (Deepgram speech_final 等) を正規化して載せる。
+    # ターン検出 (FusionTurnDetector) がテキスト意味と融合して使う。
+    endpoint_hint: bool = False
 
     @property
     def is_usable(self) -> bool:
