@@ -16,6 +16,7 @@ import asyncio
 import os
 from pathlib import Path
 
+from ..adapters.filler import PrerenderedFiller
 from ..adapters.llm_claude import ClaudeLLM
 from ..adapters.stt_deepgram import DeepgramSTT
 from ..adapters.transport_wav import WavFileTransport
@@ -59,11 +60,20 @@ async def main() -> None:
     parser.add_argument("--out", dest="out_path", default="reply.wav")
     parser.add_argument("--voice", dest="voice_id", required=True)
     parser.add_argument("--system", dest="system", default="あなたは親しみやすい相棒。")
+    parser.add_argument(
+        "--fillers-dir", dest="fillers_dir", default=None,
+        help="声優フィラー WAV のディレクトリ (レイテンシ隠蔽。scripts/render_fillers.py で生成)",
+    )
     args = parser.parse_args()
 
     load_token_files()
     if missing := missing_keys():
         raise SystemExit(f"必要な API キーが未設定: {', '.join(missing)}")
+
+    filler = None
+    if args.fillers_dir:
+        pf = PrerenderedFiller(args.fillers_dir)
+        filler = pf if pf.available else None
 
     transport = WavFileTransport(args.in_path, args.out_path)
     orch = ConversationOrchestrator(
@@ -76,6 +86,7 @@ async def main() -> None:
             audit=StdoutAudit(),
         ),
         turn_detector=FusionTurnDetector(),
+        filler=filler,
         transport=transport,
         config=OrchestratorConfig(system_prompt=args.system),
     )

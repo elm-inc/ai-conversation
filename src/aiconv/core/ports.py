@@ -106,6 +106,17 @@ class AudioTransport(Protocol):
 
 
 @runtime_checkable
+class FillerProvider(Protocol):
+    """相槌/フィラーの音声フレームを供給する (レイテンシ隠蔽用)。
+
+    LLM の TTFT を「うーん」「なるほど」等で埋め、本応答が用意でき次第ストップする。
+    本応答が来るまで流せるよう、十分な長さ (またはループした) フレーム列を yield する。
+    """
+
+    def filler(self) -> AsyncIterator[AudioFrame]: ...
+
+
+@runtime_checkable
 class EmbeddingProvider(Protocol):
     """text → vector (記憶検索用)。"""
 
