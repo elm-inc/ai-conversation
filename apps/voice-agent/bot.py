@@ -15,7 +15,6 @@ from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
     Frame,
-    LLMEnablePromptCachingFrame,
     LLMFullResponseStartFrame,
     LLMRunFrame,
     TTSSpeakFrame,
@@ -111,7 +110,6 @@ async def run_bot(transport: BaseTransport) -> None:
             stt,
             user_aggregator,
             llm,
-            FillerProcessor(),
             tts,
             transport.output(),
             assistant_aggregator,
@@ -127,8 +125,7 @@ async def run_bot(transport: BaseTransport) -> None:
     @worker.rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi: object) -> None:
         context.add_message({"role": "developer", "content": "まず一言で自己紹介して。"})
-        # prompt caching を有効化 (persona/履歴をキャッシュし TTFT を下げる)
-        await worker.queue_frames([LLMEnablePromptCachingFrame(enable=True), LLMRunFrame()])
+        await worker.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport: BaseTransport, client: object) -> None:
