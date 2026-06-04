@@ -71,5 +71,17 @@ uv run python -m aiconv.poc.run_real --in input.wav --out reply.wav --voice <ELE
 判定例: 「〜だね」→ 即 COMPLETE / 「〜だけど」(助詞止め)+音響終端 → ターン放棄 COMPLETE /
 「えーと」→ INCOMPLETE / 「うん」→ BACKCHANNEL。
 
-残り (次増分): barge-in (全二重・割り込み復帰、要 Pipecat 全二重トランスポート)、
-相槌/フィラーによるレイテンシ隠蔽 (事前録音クリップ)。
+**相槌/フィラーによるレイテンシ隠蔽** も実装:
+
+- `core/ports.py` `FillerProvider` — 相槌/フィラーの音声を供給するポート
+- `adapters/filler.py` — `MockFiller` (無音) / `PrerenderedFiller` (声優クリップをループ)
+- `core/orchestrator.py` — LLM→TTS をバックグラウンド生成しつつ、**本応答が来るまで相槌を流す**。
+  本応答到着で即停止。`first_audio`(フィラー含む) と `first_response_audio`(中身) を別計測
+- フィラークリップ生成: `uv run python -m aiconv.poc.render_fillers --voice <ID> --out fillers/`
+  → `run_real --fillers-dir fillers/`
+
+実測 (mock): `first_audio≈0ms` / `first_response_audio≈354ms` で体感遅延を隠蔽。
+※ 真の重なり (フィラー再生中に LLM 計算) は実時間トランスポート (Pipecat) で発現する。
+
+残り (次増分): **barge-in** (全二重・割り込み復帰)。並行 listen+speak が要るため
+Pipecat 全二重トランスポート実装後。

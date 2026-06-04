@@ -35,8 +35,13 @@ class TurnLatency:
 
     @property
     def response_latency_ms(self) -> float | None:
-        """体感遅延: end_of_speech → first_audio。"""
+        """体感遅延: end_of_speech → first_audio (フィラー含む最初の音)。"""
         return self.span("end_of_speech", "first_audio")
+
+    @property
+    def response_audio_latency_ms(self) -> float | None:
+        """本応答の遅延: end_of_speech → first_response_audio (フィラーを除いた中身)。"""
+        return self.span("end_of_speech", "first_response_audio")
 
 
 @dataclass
@@ -70,7 +75,7 @@ class LatencyRecorder:
                 lines.append(f"turn {i}: response_latency={rl:.1f}ms")
             else:
                 lines.append(f"turn {i}: (incomplete)")
-            for stage in ("stt_final", "llm_ttft", "first_audio"):
+            for stage in ("stt_final", "llm_ttft", "first_audio", "first_response_audio"):
                 v = turn.span("end_of_speech", stage)
                 if v is not None:
                     lines.append(f"    end_of_speech→{stage}: {v:.1f}ms")

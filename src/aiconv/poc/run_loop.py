@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 
+from ..adapters.filler import MockFiller
 from ..adapters.mock import MockLLM, MockSTT, MockTransport, MockTTS
 from ..adapters.turn_fusion import FusionTurnDetector
 from ..core.events import AudioFormat, AudioFrame
@@ -31,6 +32,7 @@ def build_orchestrator() -> ConversationOrchestrator:
         llm=MockLLM("そうだね、散歩日和だ。"),
         tts=MockTTS(),
         turn_detector=FusionTurnDetector(),
+        filler=MockFiller(),
         transport=MockTransport(utterance_frames()),
         metrics=LatencyRecorder(),
         config=OrchestratorConfig(system_prompt="あなたは親しみやすい相棒。"),
