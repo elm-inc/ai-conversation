@@ -19,6 +19,8 @@ from .metrics import LatencyRecorder
 from .ports import AudioTransport, LLMProvider, STTProvider, TTSProvider, TurnDetector
 
 _SENTENCE_BOUNDARY = "。．！？!?\n"
+# 入力ストリーム終了は確定的な発話終了。検出器に最大無音として最終判断を仰ぐための値。
+_END_OF_STREAM_SILENCE_MS = 10_000.0
 
 
 @dataclass
@@ -56,20 +58,22 @@ class ConversationOrchestrator:
 
         - BACKCHANNEL (相槌) はターンを奪わず聞き続ける。
         - 異常 final は健全性ゲートで弾く。
-        - 検出器が COMPLETE を出さずに STT が尽きたら、最後の usable final で確定する
-          (検出器が保守的すぎて発話を取りこぼさないためのフォールバック)。
+        - silence_ms は「最後にテキストが変わってからの経過」。更新前に計算するので、
+          終端イベント直前の沈黙が検出器に渡る (無音ベースの完了判定が効く)。
+        - 入力が尽きたら確定的な発話終了とみなし、最大無音で検出器に最終判断を仰ぐ。
+          フィラー/断片/相槌は INCOMPLETE/BACKCHANNEL のままなので応答しない。
         """
         clock = self.metrics.clock
         last_text = ""
         last_change_ms = clock()
-        fallback_final: Transcript | None = None
+        last_final: Transcript | None = None
 
         async for tr in self.stt.transcribe(self.transport.inbound()):
             now = clock()
+            silence_ms = now - last_change_ms  # 更新前に計算 (直前の沈黙を保つ)
             if tr.text != last_text:
                 last_text = tr.text
                 last_change_ms = now
-            silence_ms = now - last_change_ms
 
             # 異常 final はゲート (投機暴走の防止)
             if tr.is_final and tr.health is TranscriptHealth.ABNORMAL:
@@ -79,17 +83,21 @@ class ConversationOrchestrator:
             if decision.label is TurnLabel.BACKCHANNEL:
                 continue  # 相槌はターンを奪わない
             if decision.label is TurnLabel.COMPLETE and tr.is_usable:
-                self.metrics.mark("stt_final")
-                self.metrics.mark("end_of_speech")
-                return tr
+                return self._confirm_end(tr)
             if tr.is_final and tr.is_usable:
-                fallback_final = tr
+                last_final = tr
 
-        if fallback_final is not None:
-            self.metrics.mark("stt_final")
-            self.metrics.mark("end_of_speech")
-            return fallback_final
+        # 入力ストリーム終了 = 確定的な発話終了。最大無音で検出器に最終判断を仰ぐ。
+        if last_final is not None:
+            decision = self.turn_detector.predict(last_final, silence_ms=_END_OF_STREAM_SILENCE_MS)
+            if decision.label is TurnLabel.COMPLETE:
+                return self._confirm_end(last_final)
         return None
+
+    def _confirm_end(self, tr: Transcript) -> Transcript:
+        self.metrics.mark("stt_final")
+        self.metrics.mark("end_of_speech")
+        return tr
 
     async def _respond(self, final: Transcript) -> str:
         self.state = SpeechState.THINK

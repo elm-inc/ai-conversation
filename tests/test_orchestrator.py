@@ -70,6 +70,27 @@ async def test_endpoint_hint_completes_joshidome() -> None:
     assert len(transport.played) > 0
 
 
+async def test_filler_only_final_is_not_answered() -> None:
+    # ストリームが COMPLETE 無しで終わっても、フィラーのみ final には応答しない
+    # (codex レビュー P1: 全 final を昇格させない)
+    transport = MockTransport(utterance_frames())
+    orch = _orch(stt=ScriptedSTT([Transcript("えーと", is_final=True)]), transport=transport)
+    reply = await orch.run_turn()
+
+    assert reply is None
+    assert transport.played == []
+
+
+async def test_midlevel_final_completes_at_stream_end() -> None:
+    # 体言止め等 (中程度スコア) は音響ヒント無しでも、入力終了時に最大無音とみなして応答
+    transport = MockTransport(utterance_frames())
+    orch = _orch(stt=ScriptedSTT([Transcript("駅前のカフェ", is_final=True)]), transport=transport)
+    reply = await orch.run_turn()
+
+    assert reply == "そうだね。"
+    assert len(transport.played) > 0
+
+
 async def test_poc_loop_runs() -> None:
     orch = build_orchestrator()
     reply = await orch.run_turn()
