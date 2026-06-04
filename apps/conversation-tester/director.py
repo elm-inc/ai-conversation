@@ -85,6 +85,7 @@ def main() -> None:
             "ELEVENLABS_VOICE_ID": YUU_VOICE_ID,
             "KICKOFF": "0",  # RTVI 口火は使わない
             "KICKOFF_ON_JOIN": "1",  # あいが居る部屋に入ったら口火を切る
+            "FILLER": os.getenv("YUU_FILLER", "0"),  # フィラー検証時に YUU_FILLER=1
             "STT_LANGUAGE": "ja",
             "STT_MODEL": "nova-2",
             "TTS_MODEL": "eleven_multilingual_v2",
