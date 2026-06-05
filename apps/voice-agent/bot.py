@@ -19,6 +19,7 @@ from pipecat.frames.frames import (
     Frame,
     LLMFullResponseStartFrame,
     LLMRunFrame,
+    OutputAudioRawFrame,
     TTSSpeakFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
@@ -96,6 +97,9 @@ TURN_MIN_WORDS = int(os.getenv("TURN_MIN_WORDS", "0") or "0")
 # ~1s ごとに raw PCM (24kHz/16-bit/2ch) を追記するので SIGINT で落ちても直前まで残る。director が wav 化。
 RECORD_ENABLED = os.getenv("RECORD", "0") != "0"
 RECORD_PATH = os.getenv("RECORD_PATH") or "recording.pcm"
+# 診断用 (既定 off): 設定時、TTS 出力フレームを無加工で連結保存。AudioBufferProcessor の
+# 壁時計ベース無音再構成を介さない「素の TTS」基準を採り、録音のブツブツの切り分けに使う。
+RECORD_RAW = os.getenv("RECORD_RAW") or ""
 # ⚠ RECORD_SAMPLE_RATE は別 app の record_conversation.py `SR` と必ず一致させること
 # (raw PCM を書く側/wav 化する側で食い違うと録音が再生不能になる)。別 package のため import 不可。
 RECORD_SAMPLE_RATE = 24000
@@ -129,6 +133,30 @@ class FillerProcessor(FrameProcessor):
             await self.push_frame(
                 TTSSpeakFrame(phrase, append_to_context=False), FrameDirection.DOWNSTREAM
             )
+
+
+class RawTTSTap(FrameProcessor):
+    """TTS 出力 (OutputAudioRawFrame) を無加工で連結保存する診断用タップ。
+
+    AudioBufferProcessor の壁時計ベース無音再構成を通さない「素の TTS」を得て、録音の
+    ブツブツが TTS ストリーミング起因か録音再構成起因かを切り分ける。
+    """
+
+    def __init__(self, path: str) -> None:
+        super().__init__()
+        self._path = path
+        self._sr_written = False
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        if isinstance(frame, OutputAudioRawFrame):
+            if not self._sr_written:
+                with open(self._path + ".sr", "w") as f:
+                    f.write(str(frame.sample_rate))
+                self._sr_written = True
+            with open(self._path, "ab") as f:
+                f.write(frame.audio)
+        await self.push_frame(frame, direction)
 
 
 async def run_bot(transport: BaseTransport) -> None:
@@ -190,7 +218,10 @@ async def run_bot(transport: BaseTransport) -> None:
     if FILLER_ENABLED:
         # 応答開始時に相づちを即発話し LLM/TTS の待ちを埋める (レイテンシ隠蔽)
         processors.append(FillerProcessor())
-    processors += [tts, transport.output(), assistant_aggregator]
+    processors.append(tts)
+    if RECORD_RAW:
+        processors.append(RawTTSTap(RECORD_RAW))  # 診断: TTS 直後で素の出力をタップ
+    processors += [transport.output(), assistant_aggregator]
 
     audiobuffer = None
     if RECORD_ENABLED:

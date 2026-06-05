@@ -60,7 +60,7 @@ def speaker_env(preset: dict, sp: dict, room: str, rec_path: str, t0: float) -> 
             "ELEVENLABS_VOICE_ID": sp["voice"],
             "STT_LANGUAGE": preset["language"],
             "STT_MODEL": preset["stt_model"],
-            "TTS_MODEL": preset["tts_model"],
+            "TTS_MODEL": os.getenv("REC_TTS_MODEL", preset["tts_model"]),  # A/B 用に上書き可
             "ANTHROPIC_MODEL": preset["anthropic_model"],
             "RECORD": "1",
             "RECORD_TRACK": "bot",  # 自分の出力だけ録る (フル品質)
@@ -79,6 +79,8 @@ def speaker_env(preset: dict, sp: dict, room: str, rec_path: str, t0: float) -> 
         env["PERSONA_PROMPT"] = sp["persona"]
     if sp["scenario"]:
         env["SCENARIO"] = sp["scenario"]
+    if os.getenv("REC_RAW"):  # 診断: 素の TTS も並行保存 (ブツブツ切り分け用)
+        env["RECORD_RAW"] = rec_path + ".rawtts"
     return env
 
 
