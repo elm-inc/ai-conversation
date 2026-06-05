@@ -59,7 +59,7 @@ def speaker_env(preset: dict, sp: dict, room: str, rec_path: str, t0: float) -> 
             "AGENT_NAME": sp["name"],
             "ELEVENLABS_VOICE_ID": sp["voice"],
             "STT_LANGUAGE": preset["language"],
-            "STT_MODEL": preset["stt_model"],
+            "STT_MODEL": os.getenv("REC_STT_MODEL", preset["stt_model"]),  # A/B 用に上書き可
             "TTS_MODEL": os.getenv("REC_TTS_MODEL", preset["tts_model"]),  # A/B 用に上書き可
             "ANTHROPIC_MODEL": os.getenv("REC_ANTHROPIC_MODEL", preset["anthropic_model"]),  # A/B可
             "RECORD": "1",
