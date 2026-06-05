@@ -592,6 +592,9 @@ async def run_broadcaster(transport: BaseTransport, theme: str) -> None:
 LIVE_VAD_STOP_SECS = _env_float("LIVE_VAD_STOP_SECS", 0.6)
 LIVE_TURN_MIN_WORDS = int(os.getenv("LIVE_TURN_MIN_WORDS", "3") or "3")
 LIVE_MAX_S = int(os.getenv("LIVE_MAX_S", "300") or "300")  # 聴衆ゼロでも暴走しない安全打ち切り
+# ターン間の空きを埋めるフィラー (相づち)。LLM→TTS の生成待ち (空きの後半) を相づちで隠す。
+# 既定 on。発火頻度は共通の FILLER_PROB (secret) に従う。前半の VAD 待ちは別途 LIVE_VAD_STOP_SECS で短縮。
+LIVE_FILLER = os.getenv("LIVE_FILLER", "1") != "0"
 
 
 def _daily_room_name(room_url: str) -> str:
@@ -629,7 +632,7 @@ def _live_specs(theme: str) -> tuple[AgentSpec, AgentSpec]:
         if theme else "自然に挨拶して会話を始めて。"
     )
     common = dict(vad_stop_secs=LIVE_VAD_STOP_SECS, turn_min_words=LIVE_TURN_MIN_WORDS,
-                  auto_end_on_empty=False, enable_rtvi=False)
+                  auto_end_on_empty=False, enable_rtvi=False, filler_enabled=LIVE_FILLER)
     ai = AgentSpec(name="あい", system_instruction=ai_sys,
                    voice_id=os.getenv("ELEVENLABS_VOICE_ID") or "", keyterms=STT_KEYTERMS, **common)
     yuu = AgentSpec(name="ゆう", system_instruction=yuu_sys, voice_id=DUO_VOICE_B,
