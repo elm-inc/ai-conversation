@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ai-conversation — あいと話す / AI同士を聴く</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; margin: 0; display: flex; flex-direction: column;
+         min-height: 100vh; align-items: center; background: #0f1115; color: #e8eaed; }
+  header { padding: 28px 16px 8px; text-align: center; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .sub { opacity: .65; font-size: .9rem; }
+  .modes { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; padding: 18px; }
+  button { font-size: 1rem; padding: 14px 22px; border-radius: 12px; border: 1px solid #2a2f3a;
+           background: #1b2030; color: #e8eaed; cursor: pointer; transition: .15s; }
+  button:hover:not(:disabled) { background: #232a3d; border-color: #3a4255; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary { background: #2563eb; border-color: #2563eb; }
+  button.primary:hover { background: #1d4ed8; }
+  #status { min-height: 1.4em; opacity: .8; font-size: .9rem; padding: 4px 16px; }
+  #stage { width: min(900px, 96vw); flex: 1; display: none; padding: 0 12px 24px; }
+  iframe { width: 100%; height: min(70vh, 640px); border: 1px solid #2a2f3a; border-radius: 12px;
+           background: #000; }
+  .hint { opacity: .55; font-size: .82rem; max-width: 680px; text-align: center; padding: 6px 16px; }
+  footer { opacity: .4; font-size: .75rem; padding: 12px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>ai-conversation</h1>
+    <div class="sub">生成音声キャラクター「あい」とブラウザでリアルタイム対話</div>
+  </header>
+
+  <div class="modes">
+    <button id="talk" class="primary">🎙️ あいと話す（人↔AI）</button>
+    <button id="watch">👂 AI同士を聴く</button>
+    <button id="leave" style="display:none">⏹ 退出</button>
+  </div>
+  <div class="modes">
+    <input id="theme" placeholder="AI同士の話題（任意・例: おすすめの映画）"
+           style="font-size:.95rem; padding:10px 14px; border-radius:10px; border:1px solid #2a2f3a;
+                  background:#11141c; color:#e8eaed; width:min(420px,90vw);" />
+  </div>
+
+  <div id="status"></div>
+  <div class="hint">「あいと話す」= あなたとあいの音声対話（マイク許可が必要）。「AI同士を聴く」= AI 2人の会話をライブで聴く（テーマ任意）。どちらも下に会話画面が出ます。</div>
+
+  <div id="stage"><iframe id="frame" allow="microphone; camera; autoplay; display-capture"></iframe></div>
+
+  <footer>Pipecat Cloud + Daily / 公開 start エンドポイント経由</footer>
+
+<script>
+  // 公開 (client 埋め込み可) キー。Pipecat Cloud の公開 start エンドポイントに使う。
+  const START_URL = "https://api.pipecat.daily.co/v1/public/ai-conversation-voice/start";
+  const PUBLIC_KEY = "pk_878ab6a3-0900-4a94-b61a-1cd2f23c63ef";
+
+  const $ = (id) => document.getElementById(id);
+  const setStatus = (t) => { $("status").textContent = t; };
+
+  async function connect(payload, okMsg) {
+    $("talk").disabled = true; $("watch").disabled = true;
+    setStatus("起動中…");
+    try {
+      const res = await fetch(START_URL, {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + PUBLIC_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error("start " + res.status + ": " + (await res.text()));
+      const { dailyRoom, dailyToken } = await res.json();
+      $("frame").src = dailyRoom + "?t=" + dailyToken;
+      $("stage").style.display = "block";
+      $("leave").style.display = "inline-block";
+      setStatus(okMsg);
+    } catch (e) {
+      setStatus("起動に失敗: " + e.message);
+      $("talk").disabled = false; $("watch").disabled = false;
+    }
+  }
+
+  function talk() {
+    connect({ createDailyRoom: true }, "接続しました。マイクを許可して話しかけてください。");
+  }
+  function watch() {
+    const theme = $("theme").value.trim();
+    const body = { DUO: "1" };
+    if (theme) body.THEME = theme;
+    connect({ createDailyRoom: true, body }, "AI同士の会話を起動中…十数秒で始まります。");
+  }
+
+  function leave() {
+    $("frame").src = "about:blank";
+    $("stage").style.display = "none";
+    $("leave").style.display = "none";
+    $("talk").disabled = false; $("watch").disabled = false;
+    setStatus("退出しました。");
+  }
+
+  $("talk").addEventListener("click", talk);
+  $("watch").addEventListener("click", watch);
+  $("leave").addEventListener("click", leave);
+</script>
+</body>
+</html>
