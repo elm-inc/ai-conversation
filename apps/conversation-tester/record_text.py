@@ -95,6 +95,7 @@ def main() -> None:
     ap.add_argument("--turns", type=int, default=10)
     ap.add_argument("--out-dir", default="/tmp")
     ap.add_argument("--no-enrich", action="store_true")
+    ap.add_argument("--model", help="LLM 上書き (例 claude-sonnet-4-6)。既定は preset")
     args = ap.parse_args()
 
     for t in ("anthropic", "elevenlabs"):
@@ -104,7 +105,8 @@ def main() -> None:
 
     preset = json.loads(json.dumps(PRESETS[args.preset]))
     spk = preset["speakers"]
-    lang, model, tts_model = preset["language"], preset["anthropic_model"], preset["tts_model"]
+    lang, tts_model = preset["language"], preset["tts_model"]
+    model = args.model or preset["anthropic_model"]
 
     brief = ""
     if args.theme and not args.no_enrich:
