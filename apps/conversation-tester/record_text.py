@@ -27,6 +27,10 @@ from presets import AI_PERSONA, PRESETS, SR, THEME_TEMPLATES
 from record_conversation import expand_theme
 
 GAP_S = 0.4  # ターン間の無音 (自然な間)
+# 発話ごとに独立生成するため、stability を上げてトーンのブレ/歪みを抑える (audio bot と同等)。
+VOICE_SETTINGS = {"stability": 0.55, "similarity_boost": 0.8, "use_speaker_boost": True}
+# 完全 L/R パンは片耳だけで不自然なので、両耳に出しつつ軽く左右に配置する gentle pan。
+PAN_NEAR, PAN_FAR = 0.85, 0.5
 
 
 def _post(req: urllib.request.Request, timeout: float, attempts: int = 3) -> bytes:
@@ -59,7 +63,9 @@ def _anthropic(system: str, user: str, model: str, key: str, max_tokens: int = 2
 def _eleven_pcm(text: str, voice: str, model: str, key: str) -> bytes:
     """REST TTS でフル品質の raw PCM (24kHz mono 16-bit) を一括生成 (ストリーミング継ぎ目なし)。"""
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice}?output_format=pcm_24000"
-    body = json.dumps({"text": text, "model_id": model}).encode()
+    body = json.dumps(
+        {"text": text, "model_id": model, "voice_settings": VOICE_SETTINGS}
+    ).encode()
     req = urllib.request.Request(
         url, data=body, headers={"xi-api-key": key, "content-type": "application/json"},
         method="POST",
@@ -171,7 +177,11 @@ def main() -> None:
         return audioop.mul(mono, 2, (target * 32767) / peak)
 
     la, lb = _norm(bytes(chans[0][:nmin])), _norm(bytes(chans[1][:nmin]))
-    stereo = audioop.add(audioop.tostereo(la, 2, 1, 0), audioop.tostereo(lb, 2, 0, 1), 2)
+    # gentle pan: A は左寄り / B は右寄り、ただし両者とも両耳に出す (自然な聞き心地)
+    stereo = audioop.add(
+        audioop.tostereo(la, 2, PAN_NEAR, PAN_FAR),
+        audioop.tostereo(lb, 2, PAN_FAR, PAN_NEAR), 2,
+    )
     out = f"{base}.wav"
     with wave.open(out, "wb") as wf:
         wf.setnchannels(2)
