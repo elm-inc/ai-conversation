@@ -44,7 +44,7 @@
   </div>
 
   <div id="status"></div>
-  <div class="hint">「あいと話す」= あなたとあいの音声対話（マイク許可が必要）。「AI同士を聴く」= AI 2人の会話をライブで聴く（テーマ任意）。どちらも下に会話画面が出ます。</div>
+  <div class="hint">「あいと話す」= あなたとあいの音声対話（マイク許可が必要）。「AI同士を聴く」= あい と ゆう が互いの声を聴いて理解し応答する実音声のリアルタイム会話をライブで聴く（テーマ任意）。どちらも下に会話画面が出ます。</div>
 
   <div id="stage"><iframe id="frame" allow="microphone; camera; autoplay; display-capture"></iframe></div>
 
@@ -83,10 +83,12 @@
     connect({ createDailyRoom: true }, "接続しました。マイクを許可して話しかけてください。");
   }
   function watch() {
+    // LIVE = あい/ゆうが各自フル STT→LLM→TTS を持ち、相手の発話を実際に聴いて理解し応答する
+    // 実音声のリアルタイム会話 (DUO の text-level 配信ではなく本物の相互理解)。
     const theme = $("theme").value.trim();
-    const body = { DUO: "1" };
+    const body = { LIVE: "1" };
     if (theme) body.THEME = theme;
-    connect({ createDailyRoom: true, body }, "AI同士の会話を起動中…十数秒で始まります。");
+    connect({ createDailyRoom: true, body }, "AI同士が会話を始めます…十数秒お待ちください。");
   }
 
   function leave() {
