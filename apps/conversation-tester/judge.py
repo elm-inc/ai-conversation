@@ -15,6 +15,7 @@ record_conversation.py が残す各話者の `<base>-{a,b}.pcm.log` から、時
 from __future__ import annotations
 
 import argparse
+import collections
 import glob
 import json
 import os
@@ -170,11 +171,31 @@ def _print_report(base: str, metrics: dict, result: dict) -> None:
             print(f"      → {it.get('comment')}")
 
 
+def _print_avg(base: str, metrics: dict, runs: list[dict]) -> None:
+    axes = ["自然さ", "人格一貫性", "ターンテイキング", "整合性", "遅延体感"]
+    scored = [r for r in runs if r.get("scores")]
+    print(f"\n=== AI judge: {os.path.basename(base)} ({len(scored)}回平均) ===")
+    print(f"ターン数: {metrics.get('turns')}  LLM TTFB median: {metrics.get('llm_ttfb_median')}s")
+    print(f"\n■ スコア (n={len(scored)}, 平均 ± 標準偏差):")
+    for ax in axes:
+        vals = [r["scores"].get(ax) for r in scored if ax in r.get("scores", {})]
+        if vals:
+            sd = statistics.pstdev(vals) if len(vals) > 1 else 0.0
+            rng = f"{min(vals)}-{max(vals)}"
+            print(f"  {ax:8s}: {statistics.mean(vals):.1f} ± {sd:.1f} ({rng})")
+    tot = [sum(r["scores"].values()) for r in scored]
+    sd = statistics.pstdev(tot) if len(tot) > 1 else 0.0
+    print(f"  {'計':8s}: {statistics.mean(tot):.1f} ± {sd:.1f}  (range {min(tot)}-{max(tot)}) /25")
+    risks = collections.Counter(r.get("regression_risk") for r in scored)
+    print(f"\n■ risk 分布: {dict(risks)}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("base", nargs="?", help="録音の base パス (省略時は直近)")
     ap.add_argument("--model", default="claude-sonnet-4-6", help="審査 LLM")
     ap.add_argument("--json", action="store_true", help="JSON のみ出力 (CI 用)")
+    ap.add_argument("--repeat", type=int, default=1, help="judge を N 回回して平均 (ノイズ低減)")
     args = ap.parse_args()
 
     base = args.base or _latest_base()
@@ -185,8 +206,22 @@ def main() -> None:
     transcript, metrics = build_transcript(base)
     if not transcript:
         raise SystemExit(f"トランスクリプトが空です: {base}")
-    result = judge_with_claude(transcript, metrics, args.model)
+    if args.repeat > 1:  # judge を N 回回して平均 (judge variance 低減)
+        runs = []
+        for i in range(args.repeat):
+            try:
+                runs.append(judge_with_claude(transcript, metrics, args.model))
+            except Exception as e:  # noqa: BLE001
+                print(f"  (judge {i + 1}/{args.repeat} 失敗: {e})", file=sys.stderr)
+        if not runs:
+            raise SystemExit("judge が全回失敗")
+        if args.json:
+            print(json.dumps({"base": base, "metrics": metrics, "runs": runs}, ensure_ascii=False))
+        else:
+            _print_avg(base, metrics, runs)
+        return
 
+    result = judge_with_claude(transcript, metrics, args.model)
     if args.json:
         print(json.dumps({"base": base, "metrics": metrics, "result": result}, ensure_ascii=False))
     else:
