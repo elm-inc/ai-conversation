@@ -54,7 +54,7 @@ PRESETS: dict = {
         "language": "ja",
         "stt_model": "nova-2",
         "tts_model": "eleven_multilingual_v2",
-        "anthropic_model": "claude-sonnet-4-6",
+        "anthropic_model": "claude-haiku-4-5",
         "speakers": [
             {
                 "name": "あい",
@@ -78,7 +78,7 @@ PRESETS: dict = {
         "language": "en",
         "stt_model": "nova-2",
         "tts_model": "eleven_multilingual_v2",
-        "anthropic_model": "claude-sonnet-4-6",
+        "anthropic_model": "claude-haiku-4-5",
         "speakers": [
             {
                 "name": "Alex",

@@ -61,7 +61,7 @@ def speaker_env(preset: dict, sp: dict, room: str, rec_path: str, t0: float) -> 
             "STT_LANGUAGE": preset["language"],
             "STT_MODEL": preset["stt_model"],
             "TTS_MODEL": os.getenv("REC_TTS_MODEL", preset["tts_model"]),  # A/B 用に上書き可
-            "ANTHROPIC_MODEL": preset["anthropic_model"],
+            "ANTHROPIC_MODEL": os.getenv("REC_ANTHROPIC_MODEL", preset["anthropic_model"]),  # A/B可
             "RECORD": "1",
             "RECORD_TRACK": "bot",  # 自分の出力だけ録る (フル品質)
             "RECORD_PATH": rec_path,
