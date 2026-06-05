@@ -188,6 +188,20 @@ def _norm(mono: bytes, target: float = 0.7) -> bytes:
     return audioop.mul(mono, 2, (target * 32767) / peak)
 
 
+def _trim_lead(a: bytes, b: bytes, head: float, thresh: int = 120) -> tuple[bytes, bytes]:
+    """両 mono ch の最初の実音声 onset まで (head 残し) を同量カット。同期は保持。"""
+    win = (SR // 50) * 2  # 20ms (bytes)
+    n = min(len(a), len(b))
+    onset = 0
+    for i in range(0, n - win, win):
+        if audioop.rms(a[i : i + win], 2) > thresh or audioop.rms(b[i : i + win], 2) > thresh:
+            onset = i
+            break
+    cut = max(0, onset - int(head * SR) * 2)
+    cut -= cut % 2  # sample 境界 (16-bit)
+    return a[cut:], b[cut:]
+
+
 def merge_to_wav(a_pcm: str, b_pcm: str, out_wav: str, head: float = 0.3) -> str | None:
     """speaker A=左 / B=右 の stereo にマージ (両方フル品質・時刻整列済み)。
 
@@ -197,15 +211,17 @@ def merge_to_wav(a_pcm: str, b_pcm: str, out_wav: str, head: float = 0.3) -> str
     lead_b, audio_b = _load_track(b_pcm)
     if not audio_a and not audio_b:
         return None
-    # 両者が発話前 = min(lead) までは全員無音 (起動待ち)。head だけ残してトリム。
-    trim = max(0.0, min(lead_a, lead_b) - head)
-    a = _norm(_silence(lead_a - trim) + audio_a)
-    b = _norm(_silence(lead_b - trim) + audio_b)
+    # 相対オフセットは meta lead で保持 (どちらが先に話したか)。
+    a = _norm(_silence(lead_a) + audio_a)
+    b = _norm(_silence(lead_b) + audio_b)
     n = max(len(a), len(b))
     a = a + b"\x00\x00" * ((n - len(a)) // 2)
     b = b + b"\x00\x00" * ((n - len(b)) // 2)
     n = min(len(a), len(b))  # 端数を揃える
     a, b = a[:n], b[:n]
+    # 起動待ち+バッファ遅延等すべての先頭無音を「実音声 onset」基準で除去 (head 残す)。
+    # 両ch を同量カットするので相対同期は保持される。
+    a, b = _trim_lead(a, b, head)
     stereo = audioop.add(audioop.tostereo(a, 2, 1, 0), audioop.tostereo(b, 2, 0, 1), 2)
     with wave.open(out_wav, "wb") as wf:
         wf.setnchannels(2)
