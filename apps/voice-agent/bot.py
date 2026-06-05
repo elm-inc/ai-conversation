@@ -96,6 +96,8 @@ TURN_MIN_WORDS = int(os.getenv("TURN_MIN_WORDS", "0") or "0")
 # ~1s ごとに raw PCM (24kHz/16-bit/2ch) を追記するので SIGINT で落ちても直前まで残る。director が wav 化。
 RECORD_ENABLED = os.getenv("RECORD", "0") != "0"
 RECORD_PATH = os.getenv("RECORD_PATH") or "recording.pcm"
+# ⚠ RECORD_SAMPLE_RATE は別 app の record_conversation.py `SR` と必ず一致させること
+# (raw PCM を書く側/wav 化する側で食い違うと録音が再生不能になる)。別 package のため import 不可。
 RECORD_SAMPLE_RATE = 24000
 RECORD_CHANNELS = 2
 # "mix"=相手の声(webrtc)+自分を合成した stereo / "bot"=自分の出力のみ(フル品質、2拠点マージ用)。
@@ -219,7 +221,7 @@ async def run_bot(transport: BaseTransport) -> None:
                     with open(RECORD_PATH + ".meta", "w") as mf:
                         mf.write(str(lead))
                 with open(RECORD_PATH, "ab") as f:  # crash-safe append
-                    f.write(bytes(bot_audio))
+                    f.write(bot_audio)  # on_track_audio_data は既に bytes
         else:
 
             @audiobuffer.event_handler("on_audio_data")
@@ -228,7 +230,7 @@ async def run_bot(transport: BaseTransport) -> None:
             ) -> None:
                 # crash-safe: コールバック毎に open/append/close (SIGINT で落ちても直前まで残る)
                 with open(RECORD_PATH, "ab") as f:
-                    f.write(bytes(audio))
+                    f.write(audio)  # on_audio_data は既に bytes
 
     pipeline = Pipeline(processors)
 
@@ -275,11 +277,24 @@ async def run_bot(transport: BaseTransport) -> None:
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport: BaseTransport, client: object) -> None:
-        # NOTE (codex P2, 既知の制限): これは「任意の参加者離脱」の alias。あい単独ブラウザ用途では
-        # ユーザー離脱で即終了するのが正しい (孤児セッション/課金を防ぐ) が、bot-to-bot + 聴衆 join 時は
-        # 聴衆がタブを閉じただけで会話全体が止まる。聴衆コンテンツ (Phase D) 着手時に「残り参加者が
-        # 0 のときだけ終了」へ修正する (要 multi-party live 検証なので deploy→検証 を別サイクルで)。
-        logger.info("client disconnected, ending")
+        # codex P1: 「任意の参加者離脱」の alias。残り参加者が居る間は終了しない
+        # (聴衆がタブを閉じても bot-to-bot 会話/録音は継続)。あい単独ブラウザでは相手=ユーザー
+        # 離脱で残り 0 → 終了 (孤児セッション/課金防止)。participants() 取得失敗時は安全側で終了。
+        remaining = 0
+        try:
+            left_id = client.get("id") if isinstance(client, dict) else None
+            for k, v in (transport.participants() or {}).items():
+                if k == "local" or (isinstance(v, dict) and v.get("local")):
+                    continue
+                if left_id and k == left_id:
+                    continue
+                remaining += 1
+        except Exception as e:  # noqa: BLE001 (取得失敗は終了に倒す)
+            logger.warning("participants() 取得失敗 ({}); 安全側で終了", e)
+        if remaining > 0:
+            logger.info("participant left, {} remain; keep session", remaining)
+            return
+        logger.info("no participants remain, ending")
         await worker.cancel()
 
     runner = WorkerRunner(handle_sigint=False)

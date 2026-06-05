@@ -21,20 +21,9 @@ import time
 import wave
 from pathlib import Path
 
-VOICE_AGENT = Path(__file__).resolve().parents[1] / "voice-agent"
+from presets import YUU_PERSONA, YUU_SCENARIO, YUU_VOICE_ID  # 会話プリセットの単一ソース
 
-YUU_PERSONA = (
-    "あなたは好奇心旺盛で気さくな日本語話者「ゆう」です。"
-    "会話相手『あい』と自然に雑談します。砕けた短い日本語で、相手の話に反応しつつ自分の話もします。"
-    "挨拶は最初の一度だけにし、会話の途中で挨拶を繰り返さず、話題の続きから自然に話します。"
-    "読み上げ前提なので絵文字・記号は出さず、1〜2文で簡潔に、自然なキャッチボールを続けます。"
-)
-YUU_SCENARIO = (
-    "目標: ①軽い挨拶と近況 ②週末の予定の話題を振る ③途中で自然に天気の話へ移る "
-    "④相手の答えに共感や軽い質問を返す。不自然に終わらせず会話を続ける。"
-)
-# ゆうの声。Library voice は My Voices に追加されていれば websocket TTS でも使える。
-YUU_VOICE_ID = "GxhGYQesaQaYKePCZDEC"
+VOICE_AGENT = Path(__file__).resolve().parents[1] / "voice-agent"
 
 
 def _tok(name: str) -> str:

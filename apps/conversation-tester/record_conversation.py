@@ -2,7 +2,7 @@
 
 両スピーカーを **ローカルで起動**し、各ボットに **自分の出力 (フル品質) だけ** を録らせ
 (RECORD_TRACK=bot)、**共通 T0 で時刻整列**して 1 本の stereo WAV にマージする。WebRTC 越しの
-劣化が原理的に出ない。言語/キャラクターは PRESETS で切替 (今後増やせる)。
+劣化が原理的に出ない。言語/キャラクターは presets.PRESETS で切替 (今後増やせる)。
 
     uv run python record_conversation.py --preset ja
     uv run python record_conversation.py --preset en --seconds 120
@@ -26,84 +26,10 @@ import urllib.request
 import wave
 from pathlib import Path
 
-from director import YUU_PERSONA, YUU_SCENARIO, YUU_VOICE_ID, _tok
+from director import _tok
+from presets import PRESETS, SR  # 会話プリセット (キャラ/言語) の単一ソース
 
 VOICE_AGENT = Path(__file__).resolve().parents[1] / "voice-agent"
-SR = 24000  # bot track のサンプルレート (bot.py RECORD_SAMPLE_RATE と一致)
-AI_VOICE_ID = "lhTvHflPVOqgSWyuWQry"  # あい本番の声
-
-# --- 英語ペルソナ (en preset) ---
-ALEX_PERSONA = (
-    "You are Alex, a curious and easygoing English speaker having a casual chat with Sam. "
-    "Speak in short, natural spoken English, one or two sentences at a time. React to what "
-    "the other person says and share a little about yourself. Greet only once at the very "
-    "start; do not repeat greetings later. Your words are read aloud, so no emojis, symbols, "
-    "bullet points, or URLs."
-)
-SAM_PERSONA = (
-    "You are Sam, a warm and talkative English speaker chatting with Alex. Speak in short, "
-    "natural spoken English, one or two sentences at a time, reacting to Alex and adding your "
-    "own thoughts. Greet only once at the start, then keep the conversation flowing from the "
-    "topic. No emojis or symbols, since this is read aloud."
-)
-SAM_SCENARIO = (
-    "Goal: 1) a light greeting and how things are going, 2) bring up weekend plans, 3) drift "
-    "naturally into the weather, 4) respond with empathy and light follow-up questions. Keep "
-    "the conversation going naturally and do not end it abruptly."
-)
-
-# 各 preset = 言語 + STT/TTS/LLM + スピーカー2体。speaker[0] が口火 (kickoff)、[1] が応答役。
-# persona=None なら bot.py の既定ペルソナ (= 日本語「あい」) を使う。
-PRESETS: dict = {
-    "ja": {
-        "language": "ja",
-        "stt_model": "nova-2",
-        "tts_model": "eleven_multilingual_v2",
-        "anthropic_model": "claude-sonnet-4-6",
-        "speakers": [
-            {
-                "name": "あい",
-                "persona": None,  # bot.py 既定 (あい)
-                "voice": AI_VOICE_ID,
-                "scenario": None,
-                "kickoff": True,
-                "kickoff_prompt": "まず一言で挨拶して、相手に自然に話しかけて。",
-            },
-            {
-                "name": "ゆう",
-                "persona": YUU_PERSONA,
-                "voice": YUU_VOICE_ID,
-                "scenario": YUU_SCENARIO,
-                "kickoff": False,
-                "kickoff_prompt": "",
-            },
-        ],
-    },
-    "en": {
-        "language": "en",
-        "stt_model": "nova-2",
-        "tts_model": "eleven_multilingual_v2",
-        "anthropic_model": "claude-sonnet-4-6",
-        "speakers": [
-            {
-                "name": "Alex",
-                "persona": ALEX_PERSONA,
-                "voice": "0S5oIfi8zOZixuSj8K6n",
-                "scenario": None,
-                "kickoff": True,
-                "kickoff_prompt": "Greet briefly and start a natural conversation.",
-            },
-            {
-                "name": "Sam",
-                "persona": SAM_PERSONA,
-                "voice": "ZSNL4hPqCnqoMPaI4jGX",
-                "scenario": SAM_SCENARIO,
-                "kickoff": False,
-                "kickoff_prompt": "",
-            },
-        ],
-    },
-}
 
 
 def create_room(api_key: str, exp_min: int = 30) -> str:
