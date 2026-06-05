@@ -79,7 +79,14 @@ PERSONA = os.getenv("PERSONA_PROMPT") or (
 # すべて env 未設定時は「あい」の v0.4 既定と完全一致する。
 AGENT_NAME = os.getenv("AGENT_NAME") or "あい"  # Daily 表示名
 SCENARIO = os.getenv("SCENARIO") or ""  # 目標駆動 improv。設定時は system に追記 (interlocutor 用)
-SYSTEM_INSTRUCTION = PERSONA + (f"\n\n# シナリオ・目標\n{SCENARIO}" if SCENARIO else "")
+# テーマ展開 (record_conversation) で生成: STT 辞書ブースト語 (カンマ区切り) と事実グラウンディング brief。
+STT_KEYTERMS = os.getenv("STT_KEYTERMS") or ""
+KNOWLEDGE_BRIEF = os.getenv("KNOWLEDGE_BRIEF") or ""
+SYSTEM_INSTRUCTION = (
+    PERSONA
+    + (f"\n\n# シナリオ・目標\n{SCENARIO}" if SCENARIO else "")
+    + (f"\n\n# 参考知識 (事実を取り違えない)\n{KNOWLEDGE_BRIEF}" if KNOWLEDGE_BRIEF else "")
+)
 KICKOFF = os.getenv("KICKOFF", "1") != "0"  # RTVI client 接続時に話し始めるか (ブラウザ用)
 KICKOFF_PROMPT = os.getenv("KICKOFF_PROMPT") or "まず一言で自己紹介して。"
 # bot-to-bot 用: 参加者 join を口火に発話 (あい既定 0 で無影響。interlocutor で 1)
@@ -199,14 +206,19 @@ async def run_bot(transport: BaseTransport) -> None:
         _BG_TASKS.add(task)
         task.add_done_callback(_BG_TASKS.discard)
 
+    live_kwargs: dict = {
+        "language": STT_LANGUAGE,
+        "model": STT_MODEL,
+        "interim_results": True,
+        "smart_format": True,
+    }
+    keyterms = [k.strip() for k in STT_KEYTERMS.split(",") if k.strip()]
+    if keyterms:
+        # nova-3 は keyterm、nova-2 は keywords で用語ブースト (テーマの固有名詞の誤認識を抑制)
+        live_kwargs["keyterm" if STT_MODEL.startswith("nova-3") else "keywords"] = keyterms
     stt = DeepgramSTTService(
         api_key=os.getenv("DEEPGRAM_API_KEY"),
-        live_options=LiveOptions(
-            language=STT_LANGUAGE,
-            model=STT_MODEL,
-            interim_results=True,
-            smart_format=True,
-        ),
+        live_options=LiveOptions(**live_kwargs),
     )
 
     tts = ElevenLabsTTSService(
