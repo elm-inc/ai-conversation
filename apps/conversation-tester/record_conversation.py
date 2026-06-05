@@ -18,6 +18,7 @@ import argparse
 import audioop
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -45,6 +46,43 @@ def create_room(api_key: str, exp_min: int = 30) -> str:
     )
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.load(r)["url"]
+
+
+def expand_theme(theme: str, lang: str) -> tuple[list[str], str]:
+    """テーマから STT 辞書語(keyterms)と事実グラウンディング brief を 1 回の LLM 呼び出しで生成。
+
+    任意テーマに自動適応する「テーマで使い分け」の実体。keyterms は STT の用語ブースト、
+    knowledge は両ボット system に注入して事実幻覚を抑える (Phase 1)。失敗時は空で続行。
+    """
+    key = _tok("anthropic")
+    if not key:
+        return [], ""
+    lng = "日本語" if lang == "ja" else "English"
+    prompt = (
+        f"会話テーマ「{theme}」について {lng} で次を生成し JSON のみ返す:\n"
+        f"1. keyterms: 会話に出そうな固有名詞・作品名・人名・専門語を 8〜15 語の配列。\n"
+        f"2. knowledge: 事実誤認を防ぐための要点を 3〜5 行で簡潔に ({lng})。\n"
+        f'{{"keyterms":["..."],"knowledge":"..."}}'
+    )
+    body = json.dumps(
+        {"model": "claude-sonnet-4-6", "max_tokens": 700,
+         "messages": [{"role": "user", "content": prompt}]}
+    ).encode()
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages", data=body,
+        headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                 "content-type": "application/json"}, method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            resp = json.load(r)
+        text = "".join(b.get("text", "") for b in resp.get("content", []))
+        text = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
+        d = json.loads(text)
+        return [str(k) for k in d.get("keyterms", [])], str(d.get("knowledge", ""))
+    except Exception as e:  # noqa: BLE001
+        print(f"[enrich] theme 展開失敗 ({e}); グラウンディングなしで続行", file=sys.stderr)
+        return [], ""
 
 
 def speaker_env(preset: dict, sp: dict, room: str, rec_path: str, t0: float) -> dict[str, str]:
@@ -167,6 +205,8 @@ def main() -> None:
     ap.add_argument("--voice-a", help="speaker A (口火) の voice_id 上書き")
     ap.add_argument("--voice-b", help="speaker B (応答) の voice_id 上書き")
     ap.add_argument("--theme", help="会話の話題 (指定すると両者がこの話題を中心に話す)")
+    ap.add_argument("--no-enrich", action="store_true",
+                    help="テーマ展開 (STT辞書+グラウンディング) を無効化 (A/B 用)")
     args = ap.parse_args()
 
     for t in ("deepgram", "anthropic", "elevenlabs", "daily"):
@@ -199,6 +239,13 @@ def main() -> None:
 
     env_a = speaker_env(preset, spk[0], room, a_pcm, t0)
     env_b = speaker_env(preset, spk[1], room, b_pcm, t0)
+    if args.theme and not args.no_enrich:  # テーマ展開: STT 辞書 + グラウンディング brief を注入
+        keyterms, knowledge = expand_theme(args.theme, preset["language"])
+        for e in (env_a, env_b):
+            e["STT_KEYTERMS"] = ",".join(keyterms)
+            e["KNOWLEDGE_BRIEF"] = knowledge
+        print(f"[enrich] keyterms={len(keyterms)}語 / knowledge={len(knowledge)}字"
+              + (f"  例: {keyterms[:5]}" if keyterms else ""))
 
     print(f"[launch] {spk[1]['name']}(応答) → {spk[0]['name']}(口火) 起動 (~{args.seconds}s)...")
     proc_b = _spawn(env_b, f"{b_pcm}.log")  # 応答役を先に入室
