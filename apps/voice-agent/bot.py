@@ -13,6 +13,7 @@ import json
 import os
 import random
 import urllib.request
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -200,8 +201,46 @@ async def _prewarm_llm() -> None:
         logger.warning("prewarm skipped: {}", e)
 
 
-async def run_bot(transport: BaseTransport) -> None:
-    logger.info("Starting {} bot", AGENT_NAME)
+@dataclass
+class AgentSpec:
+    """1エージェント分の可変設定。あい単体 (人↔AI) は _default_spec が既定globalsから生成し
+    従来挙動を完全維持。LIVE デュオでは あい/ゆう を別 spec で同一 room に2体生やす。"""
+
+    name: str
+    system_instruction: str
+    voice_id: str
+    keyterms: str = ""
+    kickoff: bool = False  # RTVI client (ブラウザ) 接続時に話し始める
+    kickoff_on_join: bool = False  # 別参加者の join を口火に発話 (bot-to-bot)
+    kickoff_prompt: str = "まず一言で自己紹介して。"
+    vad_stop_secs: float = 0.2
+    turn_min_words: int = 0
+    filler_enabled: bool = False
+    auto_end_on_empty: bool = True  # 残り参加者0で worker 終了 (デュオは中央管理するため False)
+
+
+def _default_spec() -> AgentSpec:
+    """env globals から「あい」(人↔AI) の spec を生成。既定値は従来の run_bot と完全一致。"""
+    return AgentSpec(
+        name=AGENT_NAME,
+        system_instruction=SYSTEM_INSTRUCTION,
+        voice_id=os.getenv("ELEVENLABS_VOICE_ID") or "",
+        keyterms=STT_KEYTERMS,
+        kickoff=KICKOFF,
+        kickoff_on_join=KICKOFF_ON_JOIN,
+        kickoff_prompt=KICKOFF_PROMPT,
+        vad_stop_secs=VAD_STOP_SECS,
+        turn_min_words=TURN_MIN_WORDS,
+        filler_enabled=FILLER_ENABLED,
+    )
+
+
+def _build_worker(transport: BaseTransport, spec: AgentSpec) -> PipelineWorker:
+    """transport + spec から 1 エージェントの PipelineWorker を構築 (イベントハンドラ登録込み)。
+
+    run_bot (人↔AI 単体) と run_live_duo (あい+ゆう を同一 room で同居) の両方から使う。
+    """
+    logger.info("Starting {} bot", spec.name)
     if PREWARM:
         # 背景で温める (起動を block しない)。GC 防止に set へ退避。
         task = asyncio.create_task(_prewarm_llm())
@@ -214,7 +253,7 @@ async def run_bot(transport: BaseTransport) -> None:
         "interim_results": True,
         "smart_format": True,
     }
-    keyterms = [k.strip() for k in STT_KEYTERMS.split(",") if k.strip()]
+    keyterms = [k.strip() for k in spec.keyterms.split(",") if k.strip()]
     if keyterms:
         # nova-3 は keyterm、nova-2 は keywords で用語ブースト (テーマの固有名詞の誤認識を抑制)
         live_kwargs["keyterm" if STT_MODEL.startswith("nova-3") else "keywords"] = keyterms
@@ -227,7 +266,7 @@ async def run_bot(transport: BaseTransport) -> None:
         api_key=os.getenv("ELEVENLABS_API_KEY"),
         model=TTS_MODEL,
         settings=ElevenLabsTTSService.Settings(
-            voice=os.getenv("ELEVENLABS_VOICE_ID"),
+            voice=spec.voice_id,
             stability=TTS_STABILITY,
             similarity_boost=TTS_SIMILARITY,
             use_speaker_boost=TTS_SPEAKER_BOOST,
@@ -237,18 +276,18 @@ async def run_bot(transport: BaseTransport) -> None:
     llm = AnthropicLLMService(
         api_key=os.getenv("ANTHROPIC_API_KEY"),
         settings=AnthropicLLMService.Settings(
-            model=LLM_MODEL, system_instruction=SYSTEM_INSTRUCTION
+            model=LLM_MODEL, system_instruction=spec.system_instruction
         ),
     )
 
     # VAD: 終端待ちを env で調整可 (既定 0.2 = pipecat 既定なら素の Analyzer)。
     vad = (
-        SileroVADAnalyzer(params=VADParams(stop_secs=VAD_STOP_SECS))
-        if VAD_STOP_SECS != 0.2
+        SileroVADAnalyzer(params=VADParams(stop_secs=spec.vad_stop_secs))
+        if spec.vad_stop_secs != 0.2
         else SileroVADAnalyzer()
     )
     agg_kwargs: dict = {"vad_analyzer": vad}
-    if TURN_MIN_WORDS > 0:
+    if spec.turn_min_words > 0:
         # barge-in を最低語数でゲート (ハードトリガな不自然割り込みを抑制)。停止判定は既定維持。
         from pipecat.turns.user_start.min_words_user_turn_start_strategy import (
             MinWordsUserTurnStartStrategy,
@@ -256,7 +295,7 @@ async def run_bot(transport: BaseTransport) -> None:
         from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
         agg_kwargs["user_turn_strategies"] = UserTurnStrategies(
-            start=[MinWordsUserTurnStartStrategy(min_words=TURN_MIN_WORDS)]
+            start=[MinWordsUserTurnStartStrategy(min_words=spec.turn_min_words)]
         )
 
     context = LLMContext()
@@ -266,7 +305,7 @@ async def run_bot(transport: BaseTransport) -> None:
     )
 
     processors = [transport.input(), stt, user_aggregator, llm]
-    if FILLER_ENABLED:
+    if spec.filler_enabled:
         # 応答開始時に相づちを即発話し LLM/TTS の待ちを埋める (レイテンシ隠蔽)
         processors.append(FillerProcessor())
     processors.append(tts)
@@ -342,23 +381,28 @@ async def run_bot(transport: BaseTransport) -> None:
         # kickoff 時のみ自分から話し始める。NOTE: developer 指示が context に残る軽微な問題
         # (codex P2) は既知だが、TTSSpeakFrame 化は応答不能の回帰を招いたため保留中。
         await _maybe_start_recording()
-        if not KICKOFF:
+        if not spec.kickoff:
             return
-        context.add_message({"role": "developer", "content": KICKOFF_PROMPT})
+        context.add_message({"role": "developer", "content": spec.kickoff_prompt})
         await worker.queue_frames([LLMRunFrame()])
+
+    _kicked = [False]  # 1度だけ口火 (聴衆 join で再発火させない)
 
     @transport.event_handler("on_first_participant_joined")
     async def on_first_participant_joined(transport: BaseTransport, participant: object) -> None:
-        # bot-to-bot: 相手 (あい) が居る/入ってきたら口火を切る (KICKOFF_ON_JOIN 時のみ)
+        # bot-to-bot: 相手 (あい) が居る/入ってきたら口火を切る (kickoff_on_join 時のみ)
         await _maybe_start_recording()
-        if not KICKOFF_ON_JOIN:
+        if not spec.kickoff_on_join or _kicked[0]:
             return
-        logger.info("participant joined → kickoff")
-        context.add_message({"role": "developer", "content": KICKOFF_PROMPT})
+        _kicked[0] = True
+        logger.info("participant joined → kickoff ({})", spec.name)
+        context.add_message({"role": "developer", "content": spec.kickoff_prompt})
         await worker.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport: BaseTransport, client: object) -> None:
+        if not spec.auto_end_on_empty:
+            return  # デュオは run_live_duo が中央でライフサイクル管理する
         # codex P1: 「任意の参加者離脱」の alias。残り参加者が居る間は終了しない
         # (聴衆がタブを閉じても bot-to-bot 会話/録音は継続)。あい単独ブラウザでは相手=ユーザー
         # 離脱で残り 0 → 終了 (孤児セッション/課金防止)。participants() 取得失敗時は安全側で終了。
@@ -379,6 +423,12 @@ async def run_bot(transport: BaseTransport) -> None:
         logger.info("no participants remain, ending")
         await worker.cancel()
 
+    return worker
+
+
+async def run_bot(transport: BaseTransport) -> None:
+    """人↔AI 単体 (あい)。env globals 由来の既定 spec で 1 ワーカーを回す。従来挙動を維持。"""
+    worker = _build_worker(transport, _default_spec())
     runner = WorkerRunner(handle_sigint=False)
     await runner.add_workers(worker)
     await runner.run()
@@ -526,18 +576,121 @@ async def run_broadcaster(transport: BaseTransport, theme: str) -> None:
     await runner.run()
 
 
+# ===== LIVE デュオ: AI同士が「実音声で相手を聴いて理解し応答する」リアルタイム会話 =====
+# broadcaster (text-level 配信) と異なり、あい/ゆう がそれぞれフル STT→LLM→TTS を持ち、
+# 同一 Daily room に2参加者として join。相手の TTS 音声を実際に Deepgram STT で聴き取り、
+# 理解して応答する (director.py の二体・実音声を cloud 1セッションに同居させた形)。聴衆は聴くだけ。
+# bot-to-bot のターン衝突を抑えるため VAD 終端待ちを長め + 最低語数ゲートを既定にする。
+LIVE_VAD_STOP_SECS = _env_float("LIVE_VAD_STOP_SECS", 0.6)
+LIVE_TURN_MIN_WORDS = int(os.getenv("LIVE_TURN_MIN_WORDS", "3") or "3")
+LIVE_MAX_S = int(os.getenv("LIVE_MAX_S", "300") or "300")  # 聴衆ゼロでも暴走しない安全打ち切り
+
+
+def _daily_room_name(room_url: str) -> str:
+    return room_url.rstrip("/").split("/")[-1].split("?")[0]
+
+
+def _mint_daily_token(room_url: str, api_key: str) -> str | None:
+    """既存 room (Pipecat 生成) に2体目を join させる meeting token を発行。
+
+    Pipecat Cloud の room と ~/.daily_token が別アカウントだと失敗しうる → None を返し、
+    呼び元で ai_token を再利用してフォールバック join を試みる。
+    """
+    name = _daily_room_name(room_url)
+    body = json.dumps({"properties": {"room_name": name}}).encode()
+    req = urllib.request.Request(
+        "https://api.daily.co/v1/meeting-tokens", data=body,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        return json.loads(urllib.request.urlopen(req, timeout=30).read()).get("token")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[live] ゆう token 発行失敗 ({}); ai_token を再利用", e)
+        return None
+
+
+def _live_specs(theme: str) -> tuple[AgentSpec, AgentSpec]:
+    """あい(responder) と ゆう(opener) の spec。テーマ指定時は口火役が話題を切り出す。"""
+    ai_sys, yuu_sys = SYSTEM_INSTRUCTION, DUO_PERSONA_B
+    if theme:
+        ai_sys += f"\n相手が「{theme}」を切り出すので、答えて自分の体験も話し話題を続ける。"
+        yuu_sys += f"\n今日の話題は「{theme}」。自分の意見を述べてから相手に振って始める。"
+    kickoff = (
+        f"「{theme}」について自分の意見を述べてから相手に振って会話を始めて。"
+        if theme else "自然に挨拶して会話を始めて。"
+    )
+    common = dict(vad_stop_secs=LIVE_VAD_STOP_SECS, turn_min_words=LIVE_TURN_MIN_WORDS,
+                  auto_end_on_empty=False)
+    ai = AgentSpec(name="あい", system_instruction=ai_sys,
+                   voice_id=os.getenv("ELEVENLABS_VOICE_ID") or "", keyterms=STT_KEYTERMS, **common)
+    yuu = AgentSpec(name="ゆう", system_instruction=yuu_sys, voice_id=DUO_VOICE_B,
+                    keyterms=STT_KEYTERMS, kickoff_on_join=True, kickoff_prompt=kickoff, **common)
+    return ai, yuu
+
+
+async def run_live_duo(room_url: str, ai_token: str, theme: str) -> None:
+    """あい+ゆう を同一 room に2体生やし、実音声で相互に聴いて応答させる。"""
+    logger.info("Starting LIVE duo (real-audio, theme={})", theme or "なし")
+    ai_spec, yuu_spec = _live_specs(theme)
+
+    daily_key = os.getenv("DAILY_API_KEY") or ""
+    yuu_token = None
+    if daily_key:
+        yuu_token = await asyncio.to_thread(_mint_daily_token, room_url, daily_key)
+    if not yuu_token:
+        logger.warning("[live] ゆう token 未取得 → ai_token を再利用 (同室 join 試行)")
+        yuu_token = ai_token
+
+    def _tp(token: str, name: str) -> DailyTransport:
+        return DailyTransport(
+            room_url, token, name,
+            params=DailyParams(audio_in_enabled=True, audio_out_enabled=True),
+        )
+
+    ai_worker = _build_worker(_tp(ai_token, "あい"), ai_spec)
+    yuu_worker = _build_worker(_tp(yuu_token, "ゆう"), yuu_spec)
+
+    runner = WorkerRunner(handle_sigint=False)
+
+    async def _cap() -> None:  # 安全打ち切り (暴走/孤児セッション防止)
+        await asyncio.sleep(LIVE_MAX_S)
+        logger.info("[live] max {}s reached, ending duo", LIVE_MAX_S)
+        for w in (ai_worker, yuu_worker):
+            try:
+                await w.cancel()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[live] cancel 失敗: {}", e)
+
+    cap = asyncio.create_task(_cap())
+    _BG_TASKS.add(cap)
+    cap.add_done_callback(_BG_TASKS.discard)
+
+    await runner.add_workers(ai_worker, yuu_worker)
+    await runner.run()
+    cap.cancel()
+
+
 async def bot(runner_args: RunnerArguments) -> None:
     """Pipecat Cloud / runner エントリポイント。"""
     if not os.getenv("ELEVENLABS_VOICE_ID"):
         raise RuntimeError("ELEVENLABS_VOICE_ID (声優 voice_id) が未設定です")
 
     body = getattr(runner_args, "body", None) or {}
-    duo = str(body.get("DUO", os.getenv("DUO", "0"))).lower() not in ("0", "", "false", "none")
+
+    def _flag(name: str) -> bool:
+        return str(body.get(name, os.getenv(name, "0"))).lower() not in ("0", "", "false", "none")
+
+    live = _flag("LIVE")  # AI同士が実音声で聴いて応答するリアルタイム会話 (本命)
+    duo = _flag("DUO")  # text-level 配信 (録音/コンテンツ用に残置)
     theme = str(body.get("THEME") or os.getenv("DUO_THEME") or "")
 
     match runner_args:
         case DailyRunnerArguments():
-            if duo:  # AI同士ライブ配信 (出力専用、聴衆が聴く)
+            if live:  # AI同士・実音声・相互理解 (あい+ゆう を同室に2体)
+                await run_live_duo(runner_args.room_url, runner_args.token, theme)
+                return
+            if duo:  # AI同士ライブ配信 (text-level, 出力専用、聴衆が聴く)
                 transport = DailyTransport(
                     runner_args.room_url, runner_args.token, "AI同士",
                     params=DailyParams(audio_in_enabled=False, audio_out_enabled=True),
