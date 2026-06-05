@@ -217,6 +217,7 @@ class AgentSpec:
     turn_min_words: int = 0
     filler_enabled: bool = False
     auto_end_on_empty: bool = True  # 残り参加者0で worker 終了 (デュオは中央管理するため False)
+    enable_rtvi: bool = True  # ブラウザ client 用 RTVI。デュオ (bot-to-bot) では False で storm 回避
 
 
 def _default_spec() -> AgentSpec:
@@ -374,17 +375,24 @@ def _build_worker(transport: BaseTransport, spec: AgentSpec) -> PipelineWorker:
         pipeline,
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
         observers=[],
+        # デュオ (bot-to-bot) では RTVI を無効化。2体が同一 room で RTVI app-message を
+        # 互いに弾き合うと「Invalid RTVI transport message」の増幅ループになり、resource 制限
+        # 下の cloud では会話を阻害する。RTVI はブラウザ client 用 (人↔AI の on_client_ready
+        # 口火) なので、デュオの口火 (on_first_participant_joined) と聴衆の音声 subscribe には不要。
+        enable_rtvi=spec.enable_rtvi,
     )
 
-    @worker.rtvi.event_handler("on_client_ready")
-    async def on_client_ready(rtvi: object) -> None:
-        # kickoff 時のみ自分から話し始める。NOTE: developer 指示が context に残る軽微な問題
-        # (codex P2) は既知だが、TTSSpeakFrame 化は応答不能の回帰を招いたため保留中。
-        await _maybe_start_recording()
-        if not spec.kickoff:
-            return
-        context.add_message({"role": "developer", "content": spec.kickoff_prompt})
-        await worker.queue_frames([LLMRunFrame()])
+    if spec.enable_rtvi:
+
+        @worker.rtvi.event_handler("on_client_ready")
+        async def on_client_ready(rtvi: object) -> None:
+            # kickoff 時のみ自分から話し始める。NOTE: developer 指示が context に残る軽微な問題
+            # (codex P2) は既知だが、TTSSpeakFrame 化は応答不能の回帰を招いたため保留中。
+            await _maybe_start_recording()
+            if not spec.kickoff:
+                return
+            context.add_message({"role": "developer", "content": spec.kickoff_prompt})
+            await worker.queue_frames([LLMRunFrame()])
 
     _kicked = [False]  # 1度だけ口火 (聴衆 join で再発火させない)
 
@@ -621,7 +629,7 @@ def _live_specs(theme: str) -> tuple[AgentSpec, AgentSpec]:
         if theme else "自然に挨拶して会話を始めて。"
     )
     common = dict(vad_stop_secs=LIVE_VAD_STOP_SECS, turn_min_words=LIVE_TURN_MIN_WORDS,
-                  auto_end_on_empty=False)
+                  auto_end_on_empty=False, enable_rtvi=False)
     ai = AgentSpec(name="あい", system_instruction=ai_sys,
                    voice_id=os.getenv("ELEVENLABS_VOICE_ID") or "", keyterms=STT_KEYTERMS, **common)
     yuu = AgentSpec(name="ゆう", system_instruction=yuu_sys, voice_id=DUO_VOICE_B,
