@@ -1,87 +1,123 @@
 # ai-conversation
 
-生成音声によるキャラクター対話・コンパニオンサービス。
-技術的ブレイクスルーは音声生成ではなく **「人の発話 → AI判定 → 自然な応答」の対話制御層** に置く。
+*[English](#english) | [日本語](#日本語)*
+
+<a name="english"></a>
+
+A generated-voice character-conversation / companion service. The technical breakthrough is **not** voice generation but the **orchestration layer**: *human speech → AI judgment → natural response* — low latency, intent-aware turn-taking, and a consistent personality.
+
+- Design: [docs/design/ai-conversation.md](docs/design/ai-conversation.md)
+- ADR-0001: [cascaded + custom orchestration layer](docs/adr/0001-cascaded-orchestration-architecture.md)
+- ADR-0002: [ports & adapters](docs/adr/0002-ports-and-adapters.md)
+- ADR-0003: [Pipecat Cloud + Daily pipeline](docs/adr/0003-pipecat-cloud-pipeline.md)
+
+## Repository layout
+
+```
+src/aiconv/              # Vendor-neutral orchestration core (ports & adapters)
+  core/                  #   events / ports / orchestrator(FSM) / endpointing / metrics
+  adapters/              #   mock + real (Deepgram/Claude/ElevenLabs) + turn_fusion + filler
+  poc/                   #   offline (mock) and real end-to-end loops + latency harness
+apps/voice-agent/        # Deployed voice agent "あい" (Pipecat Cloud + Daily, browser full-duplex)
+  bot.py                 #   Daily → DeepgramSTT(ja) → AnthropicLLM(persona) → ElevenLabsTTS → Daily
+apps/conversation-tester/# AI-to-AI conversation subsystem (test harness + content)
+  director.py            #   cloud あい + local interlocutor over Daily (real audio path)
+  record_conversation.py #   dual-local high-quality recording (presets, themes, enrichment)
+  record_text.py         #   text-level conversation (no STT, REST TTS) — highest coherence
+  judge.py               #   AI judge: rubric scoring of a recorded conversation
+  presets.py             #   characters / languages / themes (single source)
+docs/                    # ADRs, architecture, design
+```
+
+## Quick start
+
+```bash
+# Core PoC (offline, mock adapters)
+uv sync
+uv run python -m aiconv.poc.run_loop
+uv run pytest && uv run ruff check . && uv run mypy
+
+# Voice agent "あい" locally (needs DAILY/DEEPGRAM/ANTHROPIC/ELEVENLABS keys)
+cd apps/voice-agent && uv sync && uv run bot.py --transport daily   # opens a Daily room URL
+
+# AI-to-AI conversation + judge (tokens in ~/.{anthropic,deepgram,elevenlabs,daily}_token)
+cd apps/conversation-tester
+uv run python record_conversation.py --preset ja --theme "おすすめの映画"   # real audio path (with STT)
+uv run python record_text.py        --preset en --theme "favorite movies"  # text-level (no STT, cleanest)
+uv run python judge.py                                                      # score the latest recording
+```
+
+## Two recording modes
+
+| Mode | Path | Use |
+|---|---|---|
+| `record_conversation.py` | real audio over Daily → STT → LLM → TTS | **regression-test the live voice pipeline** (STT errors are real) |
+| `record_text.py` | text-level conversation → REST TTS | **content recordings** — no STT misrecognition, no streaming seams |
+
+`judge.py` scores any recording (自然さ / 人格一貫性 / ターンテイキング / 整合性 / 遅延体感) and emits `regression_risk` for CI use.
+
+## Design invariant
+
+Response audio is spoken **only after the user's turn is confirmed complete**. Speculative LLM drafting may run earlier, but sending audio to TTS (= speaking) always passes the turn-confirmation gate.
+
+---
+
+<a name="日本語"></a>
+
+# 日本語
+
+生成音声によるキャラクター対話・コンパニオンサービス。技術的ブレイクスルーは音声生成そのものではなく、**「人の発話 → AI 判定 → 自然な応答」の対話制御層**（低遅延・意図を汲んだターンテイキング・一貫した人格）に置く。
 
 - 設計: [docs/design/ai-conversation.md](docs/design/ai-conversation.md)
 - ADR-0001: [cascaded + 自作オーケストレーション層](docs/adr/0001-cascaded-orchestration-architecture.md)
 - ADR-0002: [ports & adapters 抽象化](docs/adr/0002-ports-and-adapters.md)
+- ADR-0003: [Pipecat Cloud + Daily パイプライン](docs/adr/0003-pipecat-cloud-pipeline.md)
 
-## Phase 0 — ポート定義 + PoC cascaded ループ (AIC-1)
-
-ベンダー非依存の安定コア (`core/`) と交換可能なアダプタ (`adapters/`) を分離する境界を確定し、
-mock アダプタでオフライン動作する cascaded ループ + レイテンシ harness を用意した。
+## リポジトリ構成
 
 ```
-src/aiconv/
-  core/
-    events.py        # 内部標準イベント型 (AudioFrame / Transcript / TokenChunk / TurnDecision ...)
-    ports.py         # 交換可能なポート (STT/TTS/LLM/TurnDetector/Memory/Embedding/AudioTransport)
-    orchestrator.py  # FSM (LISTEN/THINK/SPEAK/IDLE)。★応答音声は終端確定後のみ出力
-    metrics.py       # レイテンシ harness (end_of_speech → first_audio)
-  adapters/
-    mock.py          # オフライン PoC 用 mock 一式
-    turn.py          # 素朴な無音ターン検出 (Phase 1 で semantic 化)
-    stt_deepgram.py  # Deepgram v7 live (健全性ゲート付き)
-    llm_claude.py    # Claude streaming + prompt caching
-    tts_elevenlabs.py# ElevenLabs Flash (声優ボイス + 許諾ガード/監査ログ)
-    transport_wav.py # ローカル WAV トランスポート (実ベースライン計測用)
-    transport_pipecat.py  # 本番 WebRTC (front-end 完成後に実装)
-  poc/
-    run_loop.py      # mock で end-to-end (オフライン)
-    run_real.py      # 実プロバイダで end-to-end + 実ベースライン遅延
+src/aiconv/              # ベンダー非依存の対話オーケストレーション core (ports & adapters)
+  core/                  #   events / ports / orchestrator(FSM) / endpointing / metrics
+  adapters/              #   mock + 実(Deepgram/Claude/ElevenLabs) + turn_fusion + filler
+  poc/                   #   オフライン(mock)/実 の end-to-end ループ + レイテンシ harness
+apps/voice-agent/        # 本番ボイスエージェント「あい」(Pipecat Cloud + Daily, ブラウザ全二重)
+  bot.py                 #   Daily → DeepgramSTT(ja) → AnthropicLLM(persona) → ElevenLabsTTS → Daily
+apps/conversation-tester/# AI 同士会話サブシステム (テストハーネス + コンテンツ)
+  director.py            #   cloud あい + ローカル対話相手を Daily で同室 (実音声パス)
+  record_conversation.py #   dual-local 高品質録音 (presets/テーマ/テーマ展開)
+  record_text.py         #   テキストレベル会話 (STT なし, REST TTS) — 最も整合性が高い
+  judge.py               #   AI judge: 録音会話のルーブリック採点
+  presets.py             #   キャラ / 言語 / テーマ (単一ソース)
+docs/                    # ADR / architecture / design
 ```
 
-実アダプタは SDK を遅延 import するので、`--extra providers` 無しでもコアと mock は動く。
-
-### セットアップ & 実行 (uv)
+## クイックスタート
 
 ```bash
-uv sync                              # dev 依存を解決
-uv run python -m aiconv.poc.run_loop # PoC ループ (mock, オフライン)
-uv run pytest                        # テスト
-uv run ruff check . && uv run mypy   # lint + 型
+# core PoC (オフライン, mock)
+uv sync
+uv run python -m aiconv.poc.run_loop
+uv run pytest && uv run ruff check . && uv run mypy
+
+# ボイスエージェント「あい」をローカルで (DAILY/DEEPGRAM/ANTHROPIC/ELEVENLABS キーが必要)
+cd apps/voice-agent && uv sync && uv run bot.py --transport daily   # Daily ルーム URL が出る
+
+# AI 同士会話 + judge (トークンは ~/.{anthropic,deepgram,elevenlabs,daily}_token)
+cd apps/conversation-tester
+uv run python record_conversation.py --preset ja --theme "おすすめの映画"   # 実音声パス (STT あり)
+uv run python record_text.py        --preset en --theme "favorite movies"  # テキストレベル (STT なし, 最もクリーン)
+uv run python judge.py                                                      # 直近の録音を採点
 ```
 
-### 実プロバイダで実ベースライン計測
+## 2 つの録音モード
 
-```bash
-uv sync --extra providers
-export ANTHROPIC_API_KEY=... DEEPGRAM_API_KEY=... ELEVENLABS_API_KEY=...
-uv run python -m aiconv.poc.run_real --in input.wav --out reply.wav --voice <ELEVENLABS_VOICE_ID>
-```
+| モード | 経路 | 用途 |
+|---|---|---|
+| `record_conversation.py` | Daily 実音声 → STT → LLM → TTS | **実音声パイプラインの回帰検証**（STT 誤認識も現実として含む）|
+| `record_text.py` | テキストレベル会話 → REST TTS | **コンテンツ録音** — STT 誤認識なし・ストリーミング継ぎ目なし |
 
-声優音源を使うため `run_real` は `VoiceLicense` (許諾範囲) と `AuditSink` (監査ログ) を必ず通す。
-本番 WebRTC は `transport_pipecat` を front-end 完成後に実装する。
+`judge.py` はどちらの録音も採点（自然さ / 人格一貫性 / ターンテイキング / 整合性 / 遅延体感）し、CI 用に `regression_risk` を返す。
 
-### 設計上の不変条件
+## 設計上の不変条件
 
-応答音声は **発話終端 (TurnLabel.COMPLETE) 確定後のみ** 出力する。投機生成 (LLM ドラフト) は
-将来前倒ししてよいが、TTS への送出 = 発声は必ず終端確定ゲートを通す
-(設計レビュー反映: 確定前の投機音声をスピーカーに出さない)。
-
-## Phase 1 — ターンテイキング (AIC-2, 進行中)
-
-**融合 semantic endpointing** を実装。テキスト意味と音響シグナルの両 signal を統合する:
-
-- `core/endpointing.py` — 日本語の文末助詞/助詞止め/体言止め/フィラー/相槌から発話完結度をスコア
-- `adapters/turn_fusion.py` — `FusionTurnDetector`。テキストスコア + `endpoint_hint`(Deepgram speech_final を正規化) + 無音長 を融合し、競合時は優先度で裁定
-- `core/orchestrator.py` — LISTEN を **ストリーミング endpointing** 化。partial ごとに検出器へ問い、COMPLETE で確定。相槌 (BACKCHANNEL) はターンを奪わず聞き続ける
-
-判定例: 「〜だね」→ 即 COMPLETE / 「〜だけど」(助詞止め)+音響終端 → ターン放棄 COMPLETE /
-「えーと」→ INCOMPLETE / 「うん」→ BACKCHANNEL。
-
-**相槌/フィラーによるレイテンシ隠蔽** も実装:
-
-- `core/ports.py` `FillerProvider` — 相槌/フィラーの音声を供給するポート
-- `adapters/filler.py` — `MockFiller` (無音) / `PrerenderedFiller` (声優クリップをループ)
-- `core/orchestrator.py` — LLM→TTS をバックグラウンド生成しつつ、**本応答が来るまで相槌を流す**。
-  本応答到着で即停止。`first_audio`(フィラー含む) と `first_response_audio`(中身) を別計測
-- フィラークリップ生成: `uv run python -m aiconv.poc.render_fillers --voice <ID> --out fillers/`
-  → `run_real --fillers-dir fillers/`
-
-実測 (mock): `first_audio≈0ms` / `first_response_audio≈354ms` で体感遅延を隠蔽。
-※ 真の重なり (フィラー再生中に LLM 計算) は実時間トランスポート (Pipecat) で発現する。
-
-残り (次増分): **barge-in** (全二重・割り込み復帰)。並行 listen+speak が要るため
-Pipecat 全二重トランスポート実装後。
+応答音声は **発話終端が確定した後のみ** 発声する。投機的な LLM ドラフトは前倒し可だが、TTS への送出（＝発声）は必ず終端確定ゲートを通す。
