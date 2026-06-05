@@ -179,10 +179,10 @@ def main() -> None:
         spk[0]["voice"] = args.voice_a
     if args.voice_b:
         spk[1]["voice"] = args.voice_b
-    if args.theme:  # 話題を両者の scenario と口火役の kickoff に注入 (preset 言語のテンプレで)
+    if args.theme:  # 話題を注入 (preset 言語のテンプレ)。opener=切り出す役 / responder=乗る役
         tpl = THEME_TEMPLATES.get(preset["language"], THEME_TEMPLATES["en"])
-        for s in spk:
-            s["scenario"] = tpl["scenario"].format(theme=args.theme)
+        spk[0]["scenario"] = tpl["opener"].format(theme=args.theme)
+        spk[1]["scenario"] = tpl["responder"].format(theme=args.theme)
         spk[0]["kickoff_prompt"] = tpl["kickoff"].format(theme=args.theme)
 
     room = create_room(_tok("daily"))

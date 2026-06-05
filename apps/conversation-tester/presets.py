@@ -47,15 +47,22 @@ SAM_SCENARIO = (
     "the conversation going naturally and do not end it abruptly."
 )
 
-# テーマ (話題) 注入テンプレ。--theme 指定時に preset の language で選ぶ (両者の scenario と
-# 口火役の kickoff を上書き)。新言語は 1 言語分足す (無ければ en にフォールバック)。
+# テーマ (話題) 注入テンプレ。--theme 指定時に preset の language で選ぶ。
+# 口火役(opener)と応答役(responder)で指示を分ける: 両者に「話題を切り出せ」と渡すと
+# 二人とも同じ質問で始めて不自然になるため、切り出すのは opener のみ・responder は乗る側。
+# 新言語は 1 言語分足す (無ければ en にフォールバック)。
 THEME_TEMPLATES: dict = {
     "ja": {
-        "scenario": "今日の話題は「{theme}」です。この話題を中心に自然に雑談を続けてください。",
+        "opener": "今日の話題は「{theme}」です。あなたから自然に話を切り出し、"
+        "この話題を中心に会話を続けてください。",
+        "responder": "相手が「{theme}」の話題を切り出します。挨拶のあとは相手の話にちゃんと答え、"
+        "自分の体験や意見を返してこの話題を続けてください。自分から同じ話題を振り直さないでください。",
         "kickoff": "「{theme}」について相手に自然に話を振って会話を始めてください。",
     },
     "en": {
-        "scenario": 'Today\'s topic is "{theme}". Keep the conversation centered on it.',
+        "opener": 'Today\'s topic is "{theme}". Bring it up yourself and keep the chat on it.',
+        "responder": 'The other person brings up "{theme}". After greeting, answer them and share '
+        "your own views to continue the topic. Do not re-introduce the topic yourself.",
         "kickoff": 'Start by naturally bringing up the topic "{theme}".',
     },
 }

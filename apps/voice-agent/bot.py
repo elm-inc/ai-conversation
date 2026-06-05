@@ -100,6 +100,8 @@ RECORD_PATH = os.getenv("RECORD_PATH") or "recording.pcm"
 # 診断用 (既定 off): 設定時、TTS 出力フレームを無加工で連結保存。AudioBufferProcessor の
 # 壁時計ベース無音再構成を介さない「素の TTS」基準を採り、録音のブツブツの切り分けに使う。
 RECORD_RAW = os.getenv("RECORD_RAW") or ""
+# 初回応答のコールドスタート緩和: 起動時に最小の LLM 呼び出しでモデルを温める (既定 on)。
+PREWARM = os.getenv("PREWARM", "1") != "0"
 # ⚠ RECORD_SAMPLE_RATE は別 app の record_conversation.py `SR` と必ず一致させること
 # (raw PCM を書く側/wav 化する側で食い違うと録音が再生不能になる)。別 package のため import 不可。
 RECORD_SAMPLE_RATE = 24000
@@ -159,8 +161,24 @@ class RawTTSTap(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
+async def _prewarm_llm() -> None:
+    """初回応答のコールドスタート緩和: 最小の LLM 呼び出しでモデル/接続を温める。失敗は無視。"""
+    try:
+        import anthropic
+
+        client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        await client.messages.create(
+            model=LLM_MODEL, max_tokens=1, messages=[{"role": "user", "content": "hi"}]
+        )
+        logger.info("LLM prewarmed ({})", LLM_MODEL)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("prewarm skipped: {}", e)
+
+
 async def run_bot(transport: BaseTransport) -> None:
     logger.info("Starting {} bot", AGENT_NAME)
+    if PREWARM:
+        await _prewarm_llm()
 
     stt = DeepgramSTTService(
         api_key=os.getenv("DEEPGRAM_API_KEY"),
