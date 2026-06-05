@@ -38,13 +38,15 @@ _STOP = "_on_user_turn_stopped"
 
 
 def _latest_base() -> str | None:
-    logs = sorted(glob.glob("/tmp/ai-conv-*-a.pcm.log"), key=os.path.getmtime, reverse=True)
+    # ai-conv-(record_conversation/director) と ai-text-(record_text) の両方を対象にする
+    logs = glob.glob("/tmp/ai-conv-*-a.pcm.log") + glob.glob("/tmp/ai-text-*-a.pcm.log")
+    logs = sorted(logs, key=os.path.getmtime, reverse=True)
     return logs[0][: -len("-a.pcm.log")] if logs else None
 
 
 def _speaker_names(base: str) -> tuple[str, str]:
-    """base 名 (ai-conv-<preset>-<ts>) から preset の話者名を解決。無ければ あい/ゆう。"""
-    m = re.search(r"ai-conv-([a-z]+)-\d+$", base)
+    """base 名 (ai-{conv,text}-<preset>-<ts>) から preset の話者名を解決。無ければ あい/ゆう。"""
+    m = re.search(r"ai-(?:conv|text)-([a-z]+)-\d+$", base)
     if m and m.group(1) in PRESETS:
         sp = PRESETS[m.group(1)]["speakers"]
         return sp[0]["name"], sp[1]["name"]
