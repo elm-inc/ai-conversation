@@ -47,6 +47,19 @@ SAM_SCENARIO = (
     "the conversation going naturally and do not end it abruptly."
 )
 
+# テーマ (話題) 注入テンプレ。--theme 指定時に preset の language で選ぶ (両者の scenario と
+# 口火役の kickoff を上書き)。新言語は 1 言語分足す (無ければ en にフォールバック)。
+THEME_TEMPLATES: dict = {
+    "ja": {
+        "scenario": "今日の話題は「{theme}」です。この話題を中心に自然に雑談を続けてください。",
+        "kickoff": "「{theme}」について相手に自然に話を振って会話を始めてください。",
+    },
+    "en": {
+        "scenario": 'Today\'s topic is "{theme}". Keep the conversation centered on it.',
+        "kickoff": 'Start by naturally bringing up the topic "{theme}".',
+    },
+}
+
 # 各 preset = 言語 + STT/TTS/LLM + スピーカー2体。speaker[0] が口火 (kickoff)、[1] が応答役。
 # persona=None なら bot.py の既定ペルソナ (= 日本語「あい」) を使う。
 PRESETS: dict = {

@@ -27,7 +27,7 @@ import wave
 from pathlib import Path
 
 from director import _tok
-from presets import PRESETS, SR  # 会話プリセット (キャラ/言語) の単一ソース
+from presets import PRESETS, SR, THEME_TEMPLATES  # 会話プリセット (キャラ/言語) の単一ソース
 
 VOICE_AGENT = Path(__file__).resolve().parents[1] / "voice-agent"
 
@@ -166,23 +166,31 @@ def main() -> None:
     ap.add_argument("--out-dir", default="/tmp")
     ap.add_argument("--voice-a", help="speaker A (口火) の voice_id 上書き")
     ap.add_argument("--voice-b", help="speaker B (応答) の voice_id 上書き")
+    ap.add_argument("--theme", help="会話の話題 (指定すると両者がこの話題を中心に話す)")
     args = ap.parse_args()
 
     for t in ("deepgram", "anthropic", "elevenlabs", "daily"):
         if not _tok(t):
             raise SystemExit(f"~/.{t}_token が無い")
 
-    preset = json.loads(json.dumps(PRESETS[args.preset]))  # deep copy (voice 上書き用)
+    preset = json.loads(json.dumps(PRESETS[args.preset]))  # deep copy (上書き用)
     spk = preset["speakers"]
     if args.voice_a:
         spk[0]["voice"] = args.voice_a
     if args.voice_b:
         spk[1]["voice"] = args.voice_b
+    if args.theme:  # 話題を両者の scenario と口火役の kickoff に注入 (preset 言語のテンプレで)
+        tpl = THEME_TEMPLATES.get(preset["language"], THEME_TEMPLATES["en"])
+        for s in spk:
+            s["scenario"] = tpl["scenario"].format(theme=args.theme)
+        spk[0]["kickoff_prompt"] = tpl["kickoff"].format(theme=args.theme)
 
     room = create_room(_tok("daily"))
     print(f"[room] {room}\n  (聴衆として聴くにはこの URL をブラウザで開く)")
     names = " / ".join(f"{s['name']}({s['voice'][:6]}…)" for s in spk)
     print(f"[preset] {args.preset}: {names}  lang={preset['language']}")
+    if args.theme:
+        print(f"[theme] {args.theme}")
 
     stamp = int(time.time())
     base = Path(args.out_dir) / f"ai-conv-{args.preset}-{stamp}"
