@@ -729,6 +729,54 @@ LIVE_BREVITY = (
     "\n返答は1〜2文で自然に。相手の発言をちゃんと受け止めてから、自分の考えや体験も一言添えて"
     "会話を前に進める。短い相づち1語だけで終わらせず、話が繋がるようにする。長い演説はしない。"
 )
+# テーマから前提知識(brief)+STT辞書(keyterms)を生成して両ボットに注入する (一般論の薄い会話を防ぐ)。
+LIVE_ENRICH = os.getenv("LIVE_ENRICH", "1") != "0"
+ENRICH_MODEL = os.getenv("ENRICH_MODEL") or "claude-sonnet-4-6"  # brief 生成は質優先で上位モデル
+
+
+def _expand_theme(theme: str) -> tuple[str, str]:
+    """テーマから (keyterms, 前提知識brief) を生成。両ボットに注入し具体的な会話にする。
+
+    あいのコンテナで1回だけ呼び、ゆうには spawn body で同じものを渡す (知識の食い違い防止)。
+    """
+    key = os.getenv("ANTHROPIC_API_KEY")
+    if not key or not theme:
+        return "", ""
+    prompt = (
+        f"会話テーマ「{theme}」について、この話題に詳しい2人が中身のある雑談をできるよう、"
+        f"日本語で次を生成し JSON のみ返す (前置き・コードフェンス不要):\n"
+        f"1. keyterms: 会話に出そうな固有名詞・作品名・人名・専門語を 8〜15 語の配列。\n"
+        f"2. knowledge: 語れる具体的な論点・事実・有名な例・対立する視点を、会話のネタになる粒度で"
+        f" 6〜10 行。一般論でなく固有名詞・具体例・数字を含める。\n"
+        f'{{"keyterms":["..."],"knowledge":"..."}}'
+    )
+    body = json.dumps(
+        {"model": ENRICH_MODEL, "max_tokens": 1500, "messages": [{"role": "user", "content": prompt}]}
+    ).encode()
+    # 稀に JSON が崩れ空になるためリトライ (一度成功すれば返す)。
+    for attempt in range(3):
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages", data=body,
+            headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                     "content-type": "application/json"},
+            method="POST",
+        )
+        try:
+            resp = json.loads(urllib.request.urlopen(req, timeout=60).read())
+            txt = "".join(b.get("text", "") for b in resp.get("content", [])).strip()
+            s, e = txt.find("{"), txt.rfind("}")  # フェンス/前置きを許容し {..} を抽出
+            data = json.loads(txt[s : e + 1]) if 0 <= s < e else {}
+            kts = data.get("keyterms") or []
+            kt = ", ".join(str(x) for x in kts) if isinstance(kts, list) else str(kts)
+            brief = str(data.get("knowledge", "")).strip()
+            if brief:
+                logger.info("[enrich] theme={} keyterms={}語 brief={}字", theme, len(kts), len(brief))
+                return kt, brief
+            logger.warning("[enrich] 空応答 (attempt {}), リトライ", attempt + 1)
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("[enrich] expand_theme 失敗 (attempt {}): {}", attempt + 1, ex)
+    logger.error("[enrich] テーマ知識の生成に失敗 (一般論で続行)")
+    return "", ""
 
 
 def _daily_room_name(room_url: str) -> str:
@@ -755,9 +803,12 @@ def _mint_daily_token(room_url: str, api_key: str) -> str | None:
         return None
 
 
-def _live_specs(theme: str, echo: bool = False, echo_llm: bool = False) -> tuple[AgentSpec, AgentSpec]:
+def _live_specs(
+    theme: str, echo: bool = False, echo_llm: bool = False, brief: str = "", keyterms: str = ""
+) -> tuple[AgentSpec, AgentSpec]:
     """あい(responder) と ゆう(opener) の spec。テーマ指定時は口火役が話題を切り出す。
 
+    brief/keyterms: テーマの前提知識(両ボット共有)と STT 辞書。一般論でなく具体的な会話にする。
     echo=True (実験): ゆうは LLM を使わず相手停止に即「いいね」を返し、あいが会話を駆動する。
     echo_llm=True (実験): ゆうは LLM を生成させてから本文を捨て「いいね」を返す (LLM生成時間を切出)。
     """
@@ -768,18 +819,27 @@ def _live_specs(theme: str, echo: bool = False, echo_llm: bool = False) -> tuple
     # 1〜2文の自然な長さに収める (長文4文→10秒発話は避けつつ、短すぎて繋がらないのも防ぐ)。
     ai_sys += LIVE_BREVITY
     yuu_sys += LIVE_BREVITY
+    if brief:
+        # 前提知識を両ボットに注入。具体的な固有名詞・事実を使わせ、一般論の薄い会話を防ぐ。
+        know = (
+            f"\n\n# 前提知識 (あなたはこの話題に詳しい。以下を踏まえ、具体的な固有名詞・作品名・"
+            f"事実・数字を会話に交えて話す。「いいね」「そうだね」だけの中身のない相づちで終わらせない)\n{brief}"
+        )
+        ai_sys += know
+        yuu_sys += know
     kickoff = (
-        f"「{theme}」について自分の意見を一言添えて相手に振り、会話を始めて(1〜2文)。"
+        f"「{theme}」について、具体的な作品名や事実に触れつつ自分の意見を述べて相手に振り、会話を始めて(1〜2文)。"
         if theme else "自然に挨拶して、一言添えて会話を始めて(1〜2文)。"
     )
+    kt = keyterms or STT_KEYTERMS
     common = dict(vad_stop_secs=LIVE_VAD_STOP_SECS, turn_min_words=LIVE_TURN_MIN_WORDS,
                   auto_end_on_empty=False, enable_rtvi=False, filler_enabled=LIVE_FILLER,
                   speech_timeout_stop=LIVE_SPEECH_TIMEOUT, max_tokens=LIVE_MAX_TOKENS,
-                  turn_probe=True)
+                  turn_probe=True, keyterms=kt)
     ai = AgentSpec(name="あい", system_instruction=ai_sys,
-                   voice_id=os.getenv("ELEVENLABS_VOICE_ID") or "", keyterms=STT_KEYTERMS, **common)
+                   voice_id=os.getenv("ELEVENLABS_VOICE_ID") or "", **common)
     yuu = AgentSpec(name="ゆう", system_instruction=yuu_sys, voice_id=DUO_VOICE_B,
-                    keyterms=STT_KEYTERMS, kickoff_on_join=True, kickoff_prompt=kickoff, **common)
+                    kickoff_on_join=True, kickoff_prompt=kickoff, **common)
     if echo or echo_llm:
         # 実験: あいが駆動 (口火を切り会話を続ける)、ゆうは固定「いいね」エコー。
         ai.kickoff_on_join = True
@@ -798,7 +858,10 @@ async def run_live_duo(
     logger.info(
         "Starting LIVE duo (real-audio, theme={}, echo={}, echo_llm={})", theme or "なし", echo, echo_llm
     )
-    ai_spec, yuu_spec = _live_specs(theme, echo=echo, echo_llm=echo_llm)
+    keyterms, brief = ("", "")
+    if theme and LIVE_ENRICH and not (echo or echo_llm):
+        keyterms, brief = await asyncio.to_thread(_expand_theme, theme)
+    ai_spec, yuu_spec = _live_specs(theme, echo=echo, echo_llm=echo_llm, brief=brief, keyterms=keyterms)
 
     daily_key = os.getenv("DAILY_API_KEY") or ""
     yuu_token = None
@@ -876,16 +939,23 @@ PCC_START_URL = os.getenv("PCC_START_URL") or (
 PCC_PUBLIC_KEY = os.getenv("PCC_PUBLIC_KEY") or ""  # 公開 client キー (pk_)。secret で設定。
 
 
-def _spawn_yuu(ai_room: str, theme: str, echo: bool, echo_llm: bool) -> None:
+def _spawn_yuu(
+    ai_room: str, theme: str, echo: bool, echo_llm: bool, brief: str = "", keyterms: str = ""
+) -> None:
     """あいのコンテナから、ゆうを別コンテナ(=別イベントループ)で同じ room に join させる。
 
     SPLIT 本番経路: web は 1 回 start を叩くだけ。あいが自分の room にゆうを呼ぶことで、
     片方の LLM が他方の音声配信を飢えさせない (1コンテナ2体の event-loop 競合を回避)。
+    brief/keyterms: あいが生成した前提知識を渡し、ゆうも同じ知識で話す (食い違い防止)。
     """
     if not PCC_PUBLIC_KEY:
         logger.error("[split] PCC_PUBLIC_KEY 未設定; ゆう を spawn できない (secret 要設定)")
         return
     inner = {"LIVE": "1", "SPLIT": "1", "JOIN_ROOM": ai_room, "THEME": theme}
+    if brief:
+        inner["BRIEF"] = brief
+    if keyterms:
+        inner["KEYTERMS"] = keyterms
     if echo:
         inner["ECHO"] = "1"
     if echo_llm:
@@ -925,26 +995,37 @@ async def bot(runner_args: RunnerArguments) -> None:
     match runner_args:
         case DailyRunnerArguments():
             if live and split and join_room:
-                # ゆう: 既存 room (あいの部屋) に別コンテナで join
+                # ゆう: 既存 room (あいの部屋) に別コンテナで join。前提知識はあいから body で受領。
                 daily_key = os.getenv("DAILY_API_KEY") or ""
                 tok = (
                     await asyncio.to_thread(_mint_daily_token, join_room, daily_key)
                     if daily_key else None
                 ) or runner_args.token
-                _, yuu_spec = _live_specs(theme, echo=echo, echo_llm=echo_llm)
-                logger.info("[split] ゆう が既存 room に join: {}", join_room)
+                brief = str(body.get("BRIEF") or "")
+                keyterms = str(body.get("KEYTERMS") or "")
+                _, yuu_spec = _live_specs(
+                    theme, echo=echo, echo_llm=echo_llm, brief=brief, keyterms=keyterms
+                )
+                logger.info("[split] ゆう が既存 room に join: {} (brief={}字)", join_room, len(brief))
                 await run_single_live(_live_transport(join_room, tok, "ゆう"), yuu_spec)
                 return
             if live and split:
-                # あい: 自分の room を単独コンテナで。起動時に ゆう を別コンテナで spawn し同室へ。
+                # あい: 自分の room を単独コンテナで。前提知識を生成し、ゆう を spawn 時に共有。
                 ai_room = runner_args.room_url
+                keyterms, brief = ("", "")
+                if theme and LIVE_ENRICH and not (echo or echo_llm):
+                    keyterms, brief = await asyncio.to_thread(_expand_theme, theme)
                 t = asyncio.create_task(
-                    asyncio.to_thread(_spawn_yuu, ai_room, theme, echo, echo_llm)
+                    asyncio.to_thread(_spawn_yuu, ai_room, theme, echo, echo_llm, brief, keyterms)
                 )
                 _BG_TASKS.add(t)
                 t.add_done_callback(_BG_TASKS.discard)
-                ai_spec, _ = _live_specs(theme, echo=echo, echo_llm=echo_llm)
-                logger.info("[split] あい を単独コンテナで起動し ゆう を spawn (room={})", ai_room)
+                ai_spec, _ = _live_specs(
+                    theme, echo=echo, echo_llm=echo_llm, brief=brief, keyterms=keyterms
+                )
+                logger.info(
+                    "[split] あい を起動し ゆう を spawn (room={}, brief={}字)", ai_room, len(brief)
+                )
                 await run_single_live(_live_transport(ai_room, runner_args.token, "あい"), ai_spec)
                 return
             if live:  # AI同士・実音声・相互理解 (あい+ゆう を同室に2体、1コンテナ)
