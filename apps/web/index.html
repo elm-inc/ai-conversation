@@ -83,10 +83,11 @@
     connect({ createDailyRoom: true }, "接続しました。マイクを許可して話しかけてください。");
   }
   function watch() {
-    // LIVE = あい/ゆうが各自フル STT→LLM→TTS を持ち、相手の発話を実際に聴いて理解し応答する
-    // 実音声のリアルタイム会話 (DUO の text-level 配信ではなく本物の相互理解)。
+    // LIVE+SPLIT = あい/ゆうが各自フル STT→LLM→TTS を持ち実音声で相互理解する会話。
+    // SPLIT: あいとゆうを別コンテナ(別イベントループ)で動かし、片方の LLM が相手/聴衆への
+    // 音声配信を飢えさせない (1コンテナ同居だと長い無音が出た)。あいが起動時にゆうを spawn。
     const theme = $("theme").value.trim();
-    const body = { LIVE: "1" };
+    const body = { LIVE: "1", SPLIT: "1" };
     if (theme) body.THEME = theme;
     connect({ createDailyRoom: true, body }, "AI同士が会話を始めます…十数秒お待ちください。");
   }
