@@ -12,6 +12,7 @@ import asyncio
 import json
 import os
 import random
+import time
 import urllib.request
 from dataclasses import dataclass
 
@@ -20,11 +21,17 @@ from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
     Frame,
+    LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMRunFrame,
+    LLMTextFrame,
     OutputAudioRawFrame,
     TTSSpeakFrame,
+    UserStoppedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
@@ -177,6 +184,80 @@ class RawTTSTap(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
+class TurnProbe(FrameProcessor):
+    """[診断] ターン関連フレームを1行ログ (挙動は変えない)。相手停止→自分応答の実ギャップ計測用。
+
+    各ボットに置き、以下を monotonic 秒付きで出す:
+      VAD_STOP  = 相手の声が止んだと VAD が検知
+      TURN_END  = ターン終了確定 (stop 戦略)
+      BOT_START = 自分の応答音声が出始めた  ← VAD_STOP/TURN_END からの差が「応答遅延」
+      BOT_STOP  = 自分の発話終了
+    cloud ログから1行 grep で正確な秒数が取れる (折り返しに強い)。
+    """
+
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self._name = name
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        tag = None
+        if isinstance(frame, VADUserStoppedSpeakingFrame):
+            tag = "VAD_STOP"
+        elif isinstance(frame, UserStoppedSpeakingFrame):
+            tag = "TURN_END"
+        elif isinstance(frame, BotStartedSpeakingFrame):
+            tag = "BOT_START"
+        elif isinstance(frame, BotStoppedSpeakingFrame):
+            tag = "BOT_STOP"
+        if tag:
+            logger.info("[probe] {} {} t={:.3f}", self._name, tag, time.monotonic())
+        await self.push_frame(frame, direction)
+
+
+class EchoResponder(FrameProcessor):
+    """[実験] 相手の発話終了(UserStoppedSpeakingFrame)で、内容に関わらず即座に固定フレーズを発話。
+
+    LLM を介さないので「相手が話し終えた→自分が応答を出し始める」までのターン検出遅延だけを
+    切り出して計測できる。これでも応答が遅ければ犯人はターン検出、即時なら犯人は LLM/TTS。
+    """
+
+    def __init__(self, phrase: str) -> None:
+        super().__init__()
+        self._phrase = phrase
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        await self.push_frame(frame, direction)
+        if isinstance(frame, UserStoppedSpeakingFrame) and direction == FrameDirection.DOWNSTREAM:
+            await self.push_frame(
+                TTSSpeakFrame(self._phrase, append_to_context=False), FrameDirection.DOWNSTREAM
+            )
+
+
+class LLMDiscardEcho(FrameProcessor):
+    """[実験] LLM に応答を生成させるが、その本文(LLMTextFrame)は TTS に流さず捨て、生成完了
+    (LLMFullResponseEndFrame)時に固定フレーズを発話する。
+
+    echo(LLMスキップ=即時)との差分 = LLM 生成にかかった時間。これでも「いいね」まで10秒かかれば、
+    10秒の正体は「LLM が応答を生成し終えるまで無音」(=生成完了待ち)と確定できる。
+    """
+
+    def __init__(self, phrase: str) -> None:
+        super().__init__()
+        self._phrase = phrase
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        if isinstance(frame, LLMTextFrame):
+            return  # LLM 本文は捨てる (TTS に渡さない)
+        await self.push_frame(frame, direction)
+        if isinstance(frame, LLMFullResponseEndFrame) and direction == FrameDirection.DOWNSTREAM:
+            await self.push_frame(
+                TTSSpeakFrame(self._phrase, append_to_context=False), FrameDirection.DOWNSTREAM
+            )
+
+
 _BG_TASKS: set = set()  # fire-and-forget タスクの GC 防止用 (背景 prewarm 等)
 
 
@@ -222,6 +303,10 @@ class AgentSpec:
     # (SpeechTimeout) stop に差し替える。Smart Turn は合成音声(TTS)で end-of-turn を誤判定
     # (INCOMPLETE 連発→相手がまだ話すと待ち続け数秒〜十数秒の空き) するため、デュオは固定無音に倒す。
     speech_timeout_stop: float | None = None
+    max_tokens: int | None = None  # LLM 応答長の上限。デュオは短く絞って1ターンを短文化
+    turn_probe: bool = False  # [診断] ターン遅延プローブを pipeline に挟む
+    echo_phrase: str | None = None  # [実験] 設定時、相手停止に固定フレーズ応答
+    echo_after_llm: bool = False  # [実験] LLM を生成させてから本文を捨てて echo_phrase を発話
 
 
 def _default_spec() -> AgentSpec:
@@ -278,8 +363,14 @@ def _build_worker(transport: BaseTransport, spec: AgentSpec) -> PipelineWorker:
         ),
     )
 
+    llm_params = (
+        AnthropicLLMService.InputParams(max_tokens=spec.max_tokens)
+        if spec.max_tokens
+        else None
+    )
     llm = AnthropicLLMService(
         api_key=os.getenv("ANTHROPIC_API_KEY"),
+        params=llm_params,  # デュオは応答長を絞り1ターンを短く (長い4文応答→10秒発話を防ぐ)
         settings=AnthropicLLMService.Settings(
             model=LLM_MODEL, system_instruction=spec.system_instruction
         ),
@@ -324,10 +415,21 @@ def _build_worker(transport: BaseTransport, spec: AgentSpec) -> PipelineWorker:
         user_params=LLMUserAggregatorParams(**agg_kwargs),
     )
 
-    processors = [transport.input(), stt, user_aggregator, llm]
-    if spec.filler_enabled:
-        # 応答開始時に相づちを即発話し LLM/TTS の待ちを埋める (レイテンシ隠蔽)
-        processors.append(FillerProcessor())
+    processors = [transport.input()]
+    if spec.turn_probe:
+        processors.append(TurnProbe(spec.name))  # [診断] input 直後で VAD/turn/bot フレームを観測
+    processors += [stt, user_aggregator]
+    if spec.echo_phrase and not spec.echo_after_llm:
+        # [実験] LLM を介さず、相手の発話終了で即座に固定フレーズを返す (ターン検出遅延だけを切出)
+        processors.append(EchoResponder(spec.echo_phrase))
+    elif spec.echo_phrase and spec.echo_after_llm:
+        # [実験] LLM を生成させるが本文を捨て、生成完了で固定フレーズを発話 (LLM生成時間を切出)
+        processors += [llm, LLMDiscardEcho(spec.echo_phrase)]
+    else:
+        processors.append(llm)
+        if spec.filler_enabled:
+            # 応答開始時に相づちを即発話し LLM/TTS の待ちを埋める (レイテンシ隠蔽)
+            processors.append(FillerProcessor())
     processors.append(tts)
     if RECORD_RAW:
         processors.append(RawTTSTap(RECORD_RAW))  # 診断: TTS 直後で素の出力をタップ
@@ -617,6 +719,16 @@ LIVE_FILLER = os.getenv("LIVE_FILLER", "1") != "0"
 # デュオの end-of-turn 判定: 既定 Smart Turn を固定無音タイムアウト(秒)に差し替える。
 # 相手が話し終えてからこの秒数だけ無音が続けば「ターン終了」と確定し応答を開始する。
 LIVE_SPEECH_TIMEOUT = _env_float("LIVE_SPEECH_TIMEOUT", 0.5)
+# [実験] echo モードで ゆうが返す固定フレーズ (body/env ECHO で有効化)。
+LIVE_ECHO_PHRASE = os.getenv("LIVE_ECHO_PHRASE") or "いいね。"
+# デュオの1ターンが長文(4文≈10秒発話)になり会話がテンポを失うのを防ぐ上限。
+# 短すぎると会話が繋がらないので 1〜2文ぶん確保。0 で無制限。secret で微調整可。
+LIVE_MAX_TOKENS = int(os.getenv("LIVE_MAX_TOKENS", "160") or "160")
+# 自然に繋がる程度の簡潔さを促すペルソナ追記 (短い相づちだけで終わらせない)。
+LIVE_BREVITY = (
+    "\n返答は1〜2文で自然に。相手の発言をちゃんと受け止めてから、自分の考えや体験も一言添えて"
+    "会話を前に進める。短い相づち1語だけで終わらせず、話が繋がるようにする。長い演説はしない。"
+)
 
 
 def _daily_room_name(room_url: str) -> str:
@@ -643,30 +755,50 @@ def _mint_daily_token(room_url: str, api_key: str) -> str | None:
         return None
 
 
-def _live_specs(theme: str) -> tuple[AgentSpec, AgentSpec]:
-    """あい(responder) と ゆう(opener) の spec。テーマ指定時は口火役が話題を切り出す。"""
+def _live_specs(theme: str, echo: bool = False, echo_llm: bool = False) -> tuple[AgentSpec, AgentSpec]:
+    """あい(responder) と ゆう(opener) の spec。テーマ指定時は口火役が話題を切り出す。
+
+    echo=True (実験): ゆうは LLM を使わず相手停止に即「いいね」を返し、あいが会話を駆動する。
+    echo_llm=True (実験): ゆうは LLM を生成させてから本文を捨て「いいね」を返す (LLM生成時間を切出)。
+    """
     ai_sys, yuu_sys = SYSTEM_INSTRUCTION, DUO_PERSONA_B
     if theme:
-        ai_sys += f"\n相手が「{theme}」を切り出すので、答えて自分の体験も話し話題を続ける。"
-        yuu_sys += f"\n今日の話題は「{theme}」。自分の意見を述べてから相手に振って始める。"
+        ai_sys += f"\n相手が「{theme}」を切り出すので、受け止めて答え、自分の体験も少し添えて話題を続ける。"
+        yuu_sys += f"\n今日の話題は「{theme}」。自分の意見を一言添えて相手に振り、会話を始める。"
+    # 1〜2文の自然な長さに収める (長文4文→10秒発話は避けつつ、短すぎて繋がらないのも防ぐ)。
+    ai_sys += LIVE_BREVITY
+    yuu_sys += LIVE_BREVITY
     kickoff = (
-        f"「{theme}」について自分の意見を述べてから相手に振って会話を始めて。"
-        if theme else "自然に挨拶して会話を始めて。"
+        f"「{theme}」について自分の意見を一言添えて相手に振り、会話を始めて(1〜2文)。"
+        if theme else "自然に挨拶して、一言添えて会話を始めて(1〜2文)。"
     )
     common = dict(vad_stop_secs=LIVE_VAD_STOP_SECS, turn_min_words=LIVE_TURN_MIN_WORDS,
                   auto_end_on_empty=False, enable_rtvi=False, filler_enabled=LIVE_FILLER,
-                  speech_timeout_stop=LIVE_SPEECH_TIMEOUT)
+                  speech_timeout_stop=LIVE_SPEECH_TIMEOUT, max_tokens=LIVE_MAX_TOKENS,
+                  turn_probe=True)
     ai = AgentSpec(name="あい", system_instruction=ai_sys,
                    voice_id=os.getenv("ELEVENLABS_VOICE_ID") or "", keyterms=STT_KEYTERMS, **common)
     yuu = AgentSpec(name="ゆう", system_instruction=yuu_sys, voice_id=DUO_VOICE_B,
                     keyterms=STT_KEYTERMS, kickoff_on_join=True, kickoff_prompt=kickoff, **common)
+    if echo or echo_llm:
+        # 実験: あいが駆動 (口火を切り会話を続ける)、ゆうは固定「いいね」エコー。
+        ai.kickoff_on_join = True
+        ai.kickoff_prompt = kickoff
+        yuu.kickoff_on_join = False
+        yuu.filler_enabled = False
+        yuu.echo_phrase = LIVE_ECHO_PHRASE
+        yuu.echo_after_llm = echo_llm  # True なら LLM 生成→本文破棄→「いいね」
     return ai, yuu
 
 
-async def run_live_duo(room_url: str, ai_token: str, theme: str) -> None:
+async def run_live_duo(
+    room_url: str, ai_token: str, theme: str, echo: bool = False, echo_llm: bool = False
+) -> None:
     """あい+ゆう を同一 room に2体生やし、実音声で相互に聴いて応答させる。"""
-    logger.info("Starting LIVE duo (real-audio, theme={})", theme or "なし")
-    ai_spec, yuu_spec = _live_specs(theme)
+    logger.info(
+        "Starting LIVE duo (real-audio, theme={}, echo={}, echo_llm={})", theme or "なし", echo, echo_llm
+    )
+    ai_spec, yuu_spec = _live_specs(theme, echo=echo, echo_llm=echo_llm)
 
     daily_key = os.getenv("DAILY_API_KEY") or ""
     yuu_token = None
@@ -705,6 +837,72 @@ async def run_live_duo(room_url: str, ai_token: str, theme: str) -> None:
     cap.cancel()
 
 
+async def run_single_live(transport: BaseTransport, spec: AgentSpec) -> None:
+    """LIVE の1体だけを単独コンテナ(=単独イベントループ)で回す (SPLIT 構成)。
+
+    2体を1プロセスで回すと片方の LLM がイベントループを占有し音声配信が飢える問題を、
+    各ボットを別コンテナに分けて解消する。各セッションに安全打ち切り(LIVE_MAX_S)を付ける。
+    """
+    worker = _build_worker(transport, spec)
+    runner = WorkerRunner(handle_sigint=False)
+
+    async def _cap() -> None:
+        await asyncio.sleep(LIVE_MAX_S)
+        logger.info("[live-split] max {}s reached, ending {}", LIVE_MAX_S, spec.name)
+        try:
+            await worker.cancel()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[live-split] cancel 失敗: {}", e)
+
+    cap = asyncio.create_task(_cap())
+    _BG_TASKS.add(cap)
+    cap.add_done_callback(_BG_TASKS.discard)
+    await runner.add_workers(worker)
+    await runner.run()
+    cap.cancel()
+
+
+def _live_transport(room_url: str, token: str, name: str) -> DailyTransport:
+    return DailyTransport(
+        room_url, token, name,
+        params=DailyParams(audio_in_enabled=True, audio_out_enabled=True),
+    )
+
+
+# あいのコンテナから、ゆうを別コンテナとして同じ room に呼ぶための公開 start エンドポイント。
+PCC_START_URL = os.getenv("PCC_START_URL") or (
+    "https://api.pipecat.daily.co/v1/public/ai-conversation-voice/start"
+)
+PCC_PUBLIC_KEY = os.getenv("PCC_PUBLIC_KEY") or ""  # 公開 client キー (pk_)。secret で設定。
+
+
+def _spawn_yuu(ai_room: str, theme: str, echo: bool, echo_llm: bool) -> None:
+    """あいのコンテナから、ゆうを別コンテナ(=別イベントループ)で同じ room に join させる。
+
+    SPLIT 本番経路: web は 1 回 start を叩くだけ。あいが自分の room にゆうを呼ぶことで、
+    片方の LLM が他方の音声配信を飢えさせない (1コンテナ2体の event-loop 競合を回避)。
+    """
+    if not PCC_PUBLIC_KEY:
+        logger.error("[split] PCC_PUBLIC_KEY 未設定; ゆう を spawn できない (secret 要設定)")
+        return
+    inner = {"LIVE": "1", "SPLIT": "1", "JOIN_ROOM": ai_room, "THEME": theme}
+    if echo:
+        inner["ECHO"] = "1"
+    if echo_llm:
+        inner["ECHOLLM"] = "1"
+    payload = json.dumps({"createDailyRoom": True, "body": inner}).encode()
+    req = urllib.request.Request(
+        PCC_START_URL, data=payload,
+        headers={"Authorization": f"Bearer {PCC_PUBLIC_KEY}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        urllib.request.urlopen(req, timeout=30).read()
+        logger.info("[split] ゆう を spawn (room={})", ai_room)
+    except Exception as e:  # noqa: BLE001
+        logger.error("[split] ゆう spawn 失敗: {}", e)
+
+
 async def bot(runner_args: RunnerArguments) -> None:
     """Pipecat Cloud / runner エントリポイント。"""
     if not os.getenv("ELEVENLABS_VOICE_ID"):
@@ -717,12 +915,42 @@ async def bot(runner_args: RunnerArguments) -> None:
 
     live = _flag("LIVE")  # AI同士が実音声で聴いて応答するリアルタイム会話 (本命)
     duo = _flag("DUO")  # text-level 配信 (録音/コンテンツ用に残置)
+    echo = _flag("ECHO")  # [実験] ゆうが LLM 無しで相手停止に即「いいね」応答
+    echo_llm = _flag("ECHOLLM")  # [実験] ゆうが LLM 生成→本文破棄→「いいね」 (LLM生成時間を切出)
     theme = str(body.get("THEME") or os.getenv("DUO_THEME") or "")
+
+    split = _flag("SPLIT")  # 2体を別コンテナに分離 (イベントループ競合の解消検証)
+    join_room = str(body.get("JOIN_ROOM") or "")
 
     match runner_args:
         case DailyRunnerArguments():
-            if live:  # AI同士・実音声・相互理解 (あい+ゆう を同室に2体)
-                await run_live_duo(runner_args.room_url, runner_args.token, theme)
+            if live and split and join_room:
+                # ゆう: 既存 room (あいの部屋) に別コンテナで join
+                daily_key = os.getenv("DAILY_API_KEY") or ""
+                tok = (
+                    await asyncio.to_thread(_mint_daily_token, join_room, daily_key)
+                    if daily_key else None
+                ) or runner_args.token
+                _, yuu_spec = _live_specs(theme, echo=echo, echo_llm=echo_llm)
+                logger.info("[split] ゆう が既存 room に join: {}", join_room)
+                await run_single_live(_live_transport(join_room, tok, "ゆう"), yuu_spec)
+                return
+            if live and split:
+                # あい: 自分の room を単独コンテナで。起動時に ゆう を別コンテナで spawn し同室へ。
+                ai_room = runner_args.room_url
+                t = asyncio.create_task(
+                    asyncio.to_thread(_spawn_yuu, ai_room, theme, echo, echo_llm)
+                )
+                _BG_TASKS.add(t)
+                t.add_done_callback(_BG_TASKS.discard)
+                ai_spec, _ = _live_specs(theme, echo=echo, echo_llm=echo_llm)
+                logger.info("[split] あい を単独コンテナで起動し ゆう を spawn (room={})", ai_room)
+                await run_single_live(_live_transport(ai_room, runner_args.token, "あい"), ai_spec)
+                return
+            if live:  # AI同士・実音声・相互理解 (あい+ゆう を同室に2体、1コンテナ)
+                await run_live_duo(
+                    runner_args.room_url, runner_args.token, theme, echo=echo, echo_llm=echo_llm
+                )
                 return
             if duo:  # AI同士ライブ配信 (text-level, 出力専用、聴衆が聴く)
                 transport = DailyTransport(
