@@ -3,6 +3,8 @@
 ElevenLabs の日本語ピッチアクセント問題 (平板読み) の根治に向け、アクセントを明示制御できる
 日本語特化 TTS 候補を同一テストセットで比較する (設計: docs/design/japanese-tts-optimization.md)。
 
+> 🚀 **実機 GPU での実測手順 (ドライバ整合 → 2 パス実行 → 本命判定) は [RUNBOOK.md](RUNBOOK.md)。**
+
 - 比較軸: **アクセント正確性** (フロントエンド層) / **自然さ** (聴取シート) /
   **TTFA** (目標 < 300ms) / **RTF** / **VRAM**
 - 候補: ESPnet2 VITS (本命) / VOICEVOX (並列) / Kokoro-82M (即時汎用) / ElevenLabs (現行基準)
