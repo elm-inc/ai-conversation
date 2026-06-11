@@ -14,3 +14,6 @@ build/
 # env / secrets
 .env
 *.token
+
+# tts-bench の生成物 (wav/CSV/レポート)
+apps/tts-bench/out/
