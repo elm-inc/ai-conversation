@@ -9,16 +9,19 @@
     predict_accent(text)       L1 のみ (アクセント句列。正規化済みテキスト前提)
     normalize_and_g2p(text)    L0 → L1 の統合 (FrontendResult)
     load_user_dict(), ensure_user_dict(), reset_user_dict()   ユーザー辞書 (data/accent_dict)
+    sync_keyterms(keyterms)    テーマ keyterms → 辞書候補 auto_pending.csv 追記 (needs-review)
     frontend_available()       pyopenjtalk 導入チェック (None=可 / str=導入案内)
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from .accent import (
     ENV_DICT_DIR,
     ENV_RUN_MARINE,
+    PENDING_DICT_FILENAME,
     AccentPhrase,
     compile_user_dict,
     ensure_user_dict,
@@ -35,12 +38,30 @@ from .accent import (
 )
 from .text_normalize import KNOWN_WORDS, normalize, register_words
 
+if TYPE_CHECKING:
+    from .dict_sync import DictCandidate, SyncResult, sync_keyterms
+
+# dict_sync は遅延 export: `python -m aiconv.frontend.dict_sync` (CLI) 実行時に
+# パッケージ import 経由で二重実行される (runpy RuntimeWarning) のを避ける。
+_DICT_SYNC_EXPORTS = ("DictCandidate", "SyncResult", "sync_keyterms")
+
+
+def __getattr__(name: str) -> object:
+    if name in _DICT_SYNC_EXPORTS:
+        from . import dict_sync
+
+        return getattr(dict_sync, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 __all__ = [
     "ENV_DICT_DIR",
     "ENV_RUN_MARINE",
     "KNOWN_WORDS",
+    "PENDING_DICT_FILENAME",
     "AccentPhrase",
+    "DictCandidate",
     "FrontendResult",
+    "SyncResult",
     "compile_user_dict",
     "ensure_user_dict",
     "find_dict_dir",
@@ -56,6 +77,7 @@ __all__ = [
     "predicted_reading",
     "register_words",
     "reset_user_dict",
+    "sync_keyterms",
 ]
 
 

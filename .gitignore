@@ -17,3 +17,6 @@ build/
 
 # tts-bench の生成物 (wav/CSV/レポート)
 apps/tts-bench/out/
+
+# dict_sync の未レビュー生成物 (人間が project_words.csv へ昇格)
+data/accent_dict/auto_pending.csv

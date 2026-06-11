@@ -6,6 +6,11 @@ OpenJTalk (NAIST-JDIC) 形式ユーザー辞書。設計: docs/design/japanese-t
 このディレクトリの `*.csv` がソースの全て。バイナリ (`.dic`) はコミットしない
 (実行時にプロセス毎の一時ディレクトリへコンパイルされる)。
 
+| ファイル | 役割 | 実行時ロード |
+|---|---|---|
+| `project_words.csv` | curated 辞書 (人間レビュー済み。発話に反映される) | する |
+| `auto_pending.csv` | dict_sync の自動候補 (**needs-review**。読み未検証) | **しない** |
+
 ## ビルド / ロード
 
 `aiconv.frontend.predict_accent()` の初回呼び出しで **自動適用** される
@@ -45,6 +50,37 @@ reset_user_dict()                # 解除 (素の NAIST-JDIC に戻す)
 3. 追加したらテスト文 (apps/tts-bench/test_sentences.py) か
    tests/test_tts_frontend.py に期待読みを足して回帰で守る。
 
+## auto_pending.csv — テーマ keyterms からの自動候補 (needs-review)
+
+テーマ前提知識 (`_expand_theme` の keyterms, bot.py) と同じ語彙源から辞書候補を自動生成する
+(設計 §10-4 の自動同期。実装: `src/aiconv/frontend/dict_sync.py`):
+
+```bash
+uv run python -m aiconv.frontend.dict_sync --keyterms "宮崎駿, スタジオジブリ, 大谷翔平"
+uv run python -m aiconv.frontend.dict_sync --keyterms-file keyterms.txt
+```
+
+- 各 keyterm の **読み候補・モーラ数・アクセント核** を pyopenjtalk で推定し、
+  project_words.csv と同じ 15 カラム形式 (品詞=`名詞,固有名詞,一般`) の行を
+  `auto_pending.csv` に**追記**する。既存辞書 (curated + pending) に表層がある語は
+  スキップするため再実行は冪等。
+- **pyopenjtalk は未知の固有名詞を誤読する** (宮崎駿→シュン、米津玄師→ヨネツゲンシ)。
+  だから候補はサイレントに信用せず、`load_user_dict()` は auto_pending.csv を
+  **ロードしない** (needs-review の隔離)。
+- 英字のみの keyterm は候補化しない (L0 `KNOWN_WORDS` の担当。下記「登録のコツ」)。
+- bot.py への配線はフォローアップ: `_expand_theme` が keyterms を得た直後に
+  `aiconv.frontend.sync_keyterms(kt)` を呼ぶ (失敗しても会話本体を止めないこと。
+  詳細は dict_sync.py の docstring)。
+
+### 昇格 (auto_pending.csv → project_words.csv)
+
+1. `auto_pending.csv` の行の **読み・アクセントを人間が検証** する
+   (公式表記・NHK アクセント辞典等。誤りは行を直す)。
+2. 検証済みの行を `project_words.csv` へ移動し、`auto_pending.csv` から削除する。
+   誤読しない語 (素通しで正しく読める語) は登録せず行を削除するだけでよい
+   (「登録のコツ」参照。姓+名の併合で韻律が単調になる副作用がある)。
+3. 上記「追加のルール (PR 運用)」に従い、根拠を PR 本文に書き、回帰テストを足す。
+
 ## 登録のコツ / 落とし穴
 
 - **ひらがな単独の短い語は登録しない**。例: キャラ名「あい」を `あい` のまま登録すると
@@ -57,5 +93,5 @@ reset_user_dict()                # 解除 (素の NAIST-JDIC に戻す)
 - 英単語の読み (OpenAI → オープンエーアイ等) はここではなく **L0 の既知語辞書**
   (`src/aiconv/frontend/text_normalize.py` の `KNOWN_WORDS`) に登録する
   (MeCab 辞書は ASCII 表層の扱いが不安定なため)。
-- テーマ語彙 (bot.py `_expand_theme` の keyterms) との自動同期は未実装
-  (設計 §10-4 の open question。当面は手動で本 CSV に追記する)。
+- テーマ語彙 (bot.py `_expand_theme` の keyterms) との自動同期は `dict_sync`
+  (上記「auto_pending.csv」) で行う。自動候補は人間レビューを経て昇格する。

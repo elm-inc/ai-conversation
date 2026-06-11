@@ -273,7 +273,11 @@ P0→P1 を最優先 (L1 だけで体感が大きく変わる)。P5 は別フェ
 1. **トポロジ確定 (§11)** — Pipecat ワーカーと TTS-GPU をどこで同居させるか (案 A クラウド GPU / 案 B 自前GPU+ワーカー移設)。残る主要論点。
 2. **本命エンジン確定** — ESPnet (本命) を P0 の judge 実測で確定。VOICEVOX/Kokoro を汎用ボイスでどこまで併用するか。
 3. **汎用 base の選択** — JSUT 事前学習 (要連絡) か CC BY-SA jvnv 自前 base か (§15)。
-4. **辞書の単一ソース** — `data/accent_dict` をテーマ keyterms (`_expand_theme`) と統合し自動生成するか。
+4. **辞書の単一ソース** — 方式は確定 (P1 仕上げ): `aiconv.frontend.dict_sync` がテーマ keyterms
+   (`_expand_theme` と同形式) から辞書候補を `data/accent_dict/auto_pending.csv` へ自動生成する。
+   pyopenjtalk の誤読リスクがあるため候補は **needs-review** (実行時ロードせず、人間レビューで
+   project_words.csv へ昇格 — data/accent_dict/README.md)。残タスク: bot.py `_expand_theme` からの
+   配線 (dict_sync.py docstring に手順) と辞書ヒット率の観測 (§13)。
 5. **声優音源の調達** — P5 着手時の録音台本・収録量 (100発話〜)・許諾範囲 (`VoiceLicense.allow` の定義)。
 
 > **解決済**: ライセンス精査 (§15, AGPL 回避で商用クリア) / エンジン選定 (§3, SBV2→ESPnet+VOICEVOX) /
