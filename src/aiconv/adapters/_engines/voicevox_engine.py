@@ -3,7 +3,7 @@
 audio_query → (任意で accent_phrases 編集 → mora_data) → synthesis の REST 呼び出しのみを
 担う同期層 (urllib、追加 python 依存なし)。ENGINE は LGPL-3.0 だが HTTP のプロセス分離で
 利用するため本リポのコードに伝播しない (設計 japanese-tts-optimization §3)。
-async 化・AudioFrame 正規化・L0/L1 は core アダプタ (tts_voicevox)、TTFA 計測は
+async 化・AudioFrame 正規化・L0/L1 は core アダプタ (tts_aivis)、TTFA 計測は
 apps/tts-bench/engines/voicevox.py の責務 (両者がこのモジュールを共有する)。
 """
 

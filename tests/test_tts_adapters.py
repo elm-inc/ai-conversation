@@ -22,11 +22,11 @@ from typing import Any
 
 import pytest
 
-from aiconv.adapters import tts_voicevox
+from aiconv.adapters import tts_aivis
 from aiconv.adapters._engines import EngineUnavailableError, espnet_engine
 from aiconv.adapters._engines.resample import resample_pcm16
+from aiconv.adapters.tts_aivis import AivisSpeechTTS, inject_accent
 from aiconv.adapters.tts_espnet import EspnetTTS
-from aiconv.adapters.tts_voicevox import VoicevoxTTS, inject_accent
 from aiconv.core.events import AudioFormat
 from aiconv.core.ports import TTSProvider, VoiceLicense
 from aiconv.frontend import AccentPhrase
@@ -116,7 +116,7 @@ class _FakeVoicevoxClient:
 def test_adapters_satisfy_ttsprovider_protocol() -> None:
     # 生成は espnet 未導入 / ENGINE 未起動でも成功する (遅延 import / lazy load 規約)
     assert isinstance(EspnetTTS(), TTSProvider)
-    assert isinstance(VoicevoxTTS(), TTSProvider)
+    assert isinstance(AivisSpeechTTS(), TTSProvider)
 
 
 def test_espnet_capabilities_reflect_availability() -> None:
@@ -201,7 +201,7 @@ async def test_espnet_unavailable_raises_install_hint(
 async def test_voicevox_synthesize_normalizes_to_pcm16k(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    tts = VoicevoxTTS(voice_id="vv", use_accent=False)
+    tts = AivisSpeechTTS(voice_id="vv", use_accent=False)
     fake = _FakeVoicevoxClient()
     monkeypatch.setattr(tts, "_client", fake)
     frames = [f async for f in tts.synthesize(_chunks("14:30に会いましょう。"))]
@@ -216,7 +216,7 @@ async def test_voicevox_synthesize_normalizes_to_pcm16k(
 
 async def test_voicevox_interrupt_and_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     audit = _Audit()
-    tts = VoicevoxTTS(
+    tts = AivisSpeechTTS(
         voice_id="vv",
         license=VoiceLicense(voice_id="vv", allow=lambda t: "禁止" not in t),
         audit=audit,
@@ -236,7 +236,7 @@ async def test_voicevox_interrupt_and_guard(monkeypatch: pytest.MonkeyPatch) -> 
 async def test_voicevox_engine_down_raises_launch_hint() -> None:
     """ENGINE 未起動 (接続不可) なら起動案内つきの明確な例外を出す。"""
     # 127.0.0.1:1 (tcpmux) は閉じているため即時に接続拒否される (外部ネットワーク不要)
-    tts = VoicevoxTTS(base_url="http://127.0.0.1:1", use_accent=False)
+    tts = AivisSpeechTTS(base_url="http://127.0.0.1:1", use_accent=False)
     with pytest.raises(EngineUnavailableError, match="起動"):
         [f async for f in tts.synthesize(_chunks("テスト。"))]
 
@@ -290,13 +290,13 @@ async def test_voicevox_accent_injection_calls_mora_data(
             return _wav_bytes(_tone_pcm(24_000), 24_000)
 
     # pyopenjtalk 未導入環境でも検証できるよう L1 をフェイク化 (アダプタ module 名前空間)
-    monkeypatch.setattr(tts_voicevox, "frontend_available", lambda: None)
+    monkeypatch.setattr(tts_aivis, "frontend_available", lambda: None)
     monkeypatch.setattr(
-        tts_voicevox,
+        tts_aivis,
         "predict_accent",
         lambda text: [AccentPhrase(reading="アメガ", accent=1, mora_count=3)],
     )
-    tts = VoicevoxTTS()
+    tts = AivisSpeechTTS()
     client = Client()
     monkeypatch.setattr(tts, "_client", client)
     frames = [f async for f in tts.synthesize(_chunks("雨が。"))]
@@ -308,13 +308,13 @@ async def test_voicevox_accent_injection_skipped_on_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """句構造が合わなければ既定クエリのまま合成する (mora_data は呼ばれない)。"""
-    monkeypatch.setattr(tts_voicevox, "frontend_available", lambda: None)
+    monkeypatch.setattr(tts_aivis, "frontend_available", lambda: None)
     monkeypatch.setattr(
-        tts_voicevox,
+        tts_aivis,
         "predict_accent",
         lambda text: [AccentPhrase(reading="ナガイヨミ", accent=1, mora_count=9)],
     )
-    tts = VoicevoxTTS()
+    tts = AivisSpeechTTS()
     fake = _FakeVoicevoxClient()  # accent_phrases=[] → 句数不一致 → 注入スキップ
     monkeypatch.setattr(tts, "_client", fake)
     frames = [f async for f in tts.synthesize(_chunks("テスト。"))]

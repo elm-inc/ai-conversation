@@ -1,6 +1,6 @@
 """セルフホスト TTS エンジンの低レベル呼び出し層 (同期プリミティブ)。
 
-core の TTSProvider アダプタ (tts_espnet / tts_voicevox) と P0 選定ハーネス
+core の TTSProvider アダプタ (tts_espnet / tts_aivis) と P0 選定ハーネス
 (apps/tts-bench/engines/) が**同じエンジン呼び出しを共有**するための置き場 (二重実装の禁止)。
 async 化・AudioFrame 正規化・L0/L1 フロントエンドはアダプタ側、計測はハーネス側の責務で、
 ここは「text → 16-bit mono PCM + sample_rate」の生合成だけを提供する。

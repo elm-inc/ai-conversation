@@ -78,19 +78,19 @@ def _eleven_pcm(text: str, voice: str, model: str, key: str) -> bytes:
 
 
 def _make_local_adapters(kind: str, vv_speakers: str) -> list:
-    """--tts espnet/voicevox 用の TTSProvider アダプタを話者 A/B 分つくる。"""
+    """--tts aivis/espnet/voicevox 用の TTSProvider アダプタを話者 A/B 分つくる。"""
     if kind == "espnet":
         from aiconv.adapters.tts_espnet import EspnetTTS
 
         adapter = EspnetTTS()
         return [adapter, adapter]  # JSUT 単一話者モデル (話者分離は ESPnet 話者適応後の課題)
-    if kind == "voicevox":
-        from aiconv.adapters.tts_voicevox import VoicevoxTTS
+    if kind in ("aivis", "voicevox"):
+        from aiconv.adapters.tts_aivis import AivisSpeechTTS
 
         ids = [int(x) for x in vv_speakers.split(",") if x.strip()]
         if len(ids) != 2:
-            raise SystemExit("--vv-speakers は A,B の 2 つの話者 id (例 3,2)")
-        return [VoicevoxTTS(speaker=ids[0]), VoicevoxTTS(speaker=ids[1])]
+            raise SystemExit("--vv-speakers は A,B の 2 つの話者 id")
+        return [AivisSpeechTTS(speaker=ids[0]), AivisSpeechTTS(speaker=ids[1])]
     raise SystemExit(f"未知の --tts: {kind}")
 
 
@@ -145,12 +145,12 @@ def main() -> None:
     ap.add_argument("--no-enrich", action="store_true")
     ap.add_argument("--model", help="LLM 上書き (例 claude-sonnet-4-6)。既定は preset")
     ap.add_argument(
-        "--tts", default="elevenlabs", choices=("elevenlabs", "espnet", "voicevox"),
-        help="TTS エンジン (espnet/voicevox はセルフホスト新アダプタ TTSProvider 経由)",
+        "--tts", default="elevenlabs", choices=("elevenlabs", "aivis", "espnet", "voicevox"),
+        help="TTS エンジン。aivis=本命 (AivisSpeech/SBV2, VOICEVOX互換)。espnet/voicevox は評価用",
     )
     ap.add_argument(
-        "--vv-speakers", default="3,2",
-        help="--tts voicevox の話者 id ペア A,B (既定 3,2。ENGINE の /speakers で確認)",
+        "--vv-speakers", default="888753760,1878365376",
+        help="話者 id ペア A,B (aivis/voicevox 用。既定 まお,コハク)。/speakers で確認",
     )
     args = ap.parse_args()
 

@@ -1,6 +1,8 @@
-"""VOICEVOX ENGINE TTSProvider アダプタ (LGPL を HTTP プロセス分離で利用 — 設計 §3 並列採用)。
+"""AivisSpeech TTSProvider アダプタ — 本命エンジン (設計 §3)。VOICEVOX 互換プロトコルで叩く。
 
-ローカル VOICEVOX ENGINE (既定 http://127.0.0.1:50021) へ audio_query → synthesis。
+AivisSpeech Engine (既定 http://127.0.0.1:10101, Style-Bert-VITS2/ONNX。LGPL を外部 HTTP
+プロセスで利用 → worker に copyleft 非伝播) へ audio_query → synthesis。
+VOICEVOX ENGINE も同一プロトコルなので同アダプタで利用できる (評価用)。
 合成前に必ず L0 正規化 (aiconv.frontend.normalize) を通す。さらに pyopenjtalk
 (frontend extra) が導入済みなら L1 のアクセント核を audio_query の accent_phrases に注入し、
 mora_data でピッチを再計算してから合成する (graceful: L1 と ENGINE の句構造が完全一致した
@@ -53,7 +55,7 @@ def inject_accent(
     return out
 
 
-class VoicevoxTTS:
+class AivisSpeechTTS:
     def __init__(
         self,
         *,
@@ -65,7 +67,7 @@ class VoicevoxTTS:
         use_accent: bool = True,
     ) -> None:
         self._client = VoicevoxClient(base_url=base_url, speaker=speaker)
-        self.voice_id = voice_id or f"voicevox:{self._client.speaker}"
+        self.voice_id = voice_id or f"aivis:{self._client.speaker}"
         self.license = license
         self.audit = audit
         self.use_accent = use_accent
@@ -74,7 +76,7 @@ class VoicevoxTTS:
             supports_interrupt=True,
             languages=("ja",),
             notes=(
-                f"VOICEVOX ENGINE (LGPL, HTTP プロセス分離); url={self._client.base_url}; "
+                f"AivisSpeech (Style-Bert-VITS2, LGPL 外部 HTTP); url={self._client.base_url}; "
                 f"speaker={self._client.speaker}; "
                 f"L1 アクセント注入={'on' if use_accent else 'off'}; "
                 "未起動は synthesize 時に検出"
@@ -134,3 +136,7 @@ class VoicevoxTTS:
 
     async def interrupt(self) -> None:
         self._interrupted = True
+
+
+# 後方互換エイリアス (旧称。VOICEVOX 互換プロトコルを指す)。新規コードは AivisSpeechTTS を使う。
+VoicevoxTTS = AivisSpeechTTS
