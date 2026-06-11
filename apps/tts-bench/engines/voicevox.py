@@ -1,7 +1,7 @@
 """VOICEVOX ENGINE エンジン (ローカル HTTP)。
 
 低レベル REST 呼び出し (audio_query → synthesis, urllib・追加 python 依存なし) は
-aiconv.adapters._engines.voicevox_engine に委譲する (core アダプタ tts_voicevox と共有 —
+aiconv.adapters._engines.voicevox_engine に委譲する (core アダプタ tts_aivis と共有 —
 二重実装の禁止)。本モジュールはベンチ計測のみを担う。ENGINE は LGPL だが HTTP の
 プロセス分離で使うため本リポのコードに伝播しない。tamayori-tts の VOICEVOX ONNX 運用と互換。
 アクセント編集 (accent_phrases 書き換え + mora_data) は core アダプタ側で実装済み —

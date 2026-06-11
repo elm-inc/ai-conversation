@@ -107,7 +107,7 @@ Kokoro/ElevenLabs は参照基準)。
 2. 設計 §3 の「P0 で確定」を実測値で更新 (drift 防止)
 3. AIC-14 (P3 本番統合) を本命エンジンで着手可能に。
    - ESPnet 勝利 → tts_espnet.py を Pipecat TTSService 化 (in-process)
-   - VOICEVOX 勝利 → tts_voicevox.py を HTTP で。GPU 配置 (案A/B, 設計 §11) も併せて確定
+   - AivisSpeech を tts_aivis (VOICEVOX互換) で。GPU 配置 (案A/B, 設計 §11) も併せて確定
 4. Qwen を戻す: sudo systemctl start vllm-qwen-coder
 ```
 
