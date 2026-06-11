@@ -29,6 +29,9 @@ class Capability:
     flush_latency_ms: float | None = None
     languages: tuple[str, ...] = ()
     notes: str = ""
+    # 静的に判明する利用可否 (ライブラリ未導入等)。False でも import/生成は成功させ、
+    # 実呼び出し時に導入案内つきの明確な例外を出す (セルフホスト TTS アダプタの規約)。
+    available: bool = True
 
 
 @runtime_checkable

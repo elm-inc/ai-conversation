@@ -1,71 +1,54 @@
 """ESPnet2 VITS エンジン (Apache-2.0) — 本命候補。
 
-G2P はモデル設定に焼き込まれている。既定モデル kan-bayashi/jsut_vits_accent_with_pause は
-G2P=pyopenjtalk_accent_with_pause (アクセント明示入力) の JSUT 事前学習 VITS。
-ESPNET_MODEL でモデルタグを差し替え可 (例: kan-bayashi/jsut_full_band_vits_prosody)。
-話者適応 (あい/ゆう声) は P1 でこの事前学習からファインチューンする想定。
-
-モデルは espnet_model_zoo 経由で初回ダウンロード。import 時にはロードせず、
-prepare()/初回 synthesize まで遅延する (ハーネス規約)。
+低レベル合成 (Text2Speech の lazy ロード + 一括合成) は aiconv.adapters._engines.espnet_engine
+に委譲する (core アダプタ tts_espnet と共有 — 二重実装の禁止)。本モジュールはベンチ計測
+(TTFA/elapsed/SynthResult) のみを担う。モデルタグは ESPNET_MODEL、デバイスは ESPNET_DEVICE
+で差し替え可 (詳細は espnet_engine のモジュール docstring 参照)。
 """
 
 from __future__ import annotations
 
-import importlib.util
-import os
 import time
-from typing import Any
 
 from metrics import pcm_duration_s
 
-from .base import Engine, EngineUnavailableError, SynthResult
+from aiconv.adapters._engines import EngineUnavailableError as CoreEngineUnavailableError
+from aiconv.adapters._engines.espnet_engine import EspnetSynthesizer, espnet_available
 
-_DEFAULT_MODEL = "kan-bayashi/jsut_vits_accent_with_pause"
+from .base import Engine, EngineUnavailableError, SynthResult
 
 
 class EspnetEngine(Engine):
     name = "espnet"
 
     def __init__(self, *, model_tag: str | None = None, device: str | None = None) -> None:
-        self.model_tag = model_tag or os.environ.get("ESPNET_MODEL", _DEFAULT_MODEL)
-        self.device = device or os.environ.get("ESPNET_DEVICE", "cpu")
-        self._tts: Any = None  # espnet2.bin.tts_inference.Text2Speech (遅延ロード)
+        self._core = EspnetSynthesizer(model_tag=model_tag, device=device)
+
+    @property
+    def model_tag(self) -> str:
+        return self._core.model_tag
+
+    @property
+    def device(self) -> str:
+        return self._core.device
 
     def check(self) -> str | None:
-        missing = [
-            m
-            for m in ("torch", "espnet2", "espnet_model_zoo", "pyopenjtalk")
-            if importlib.util.find_spec(m) is None
-        ]
-        if missing:
-            return (
-                f"{'/'.join(missing)} 未導入: "
-                "uv sync --inexact --extra tts-bench --extra tts-bench-espnet"
-            )
-        return None
+        return espnet_available()
 
     def prepare(self) -> None:
-        if self._tts is not None:
-            return
-        reason = self.check()
-        if reason is not None:
-            raise EngineUnavailableError(f"{self.name}: {reason}")
-        from espnet2.bin.tts_inference import Text2Speech
-
-        # モデルタグは初回のみ DL される (espnet_model_zoo のキャッシュに保存)
-        self._tts = Text2Speech.from_pretrained(model_tag=self.model_tag, device=self.device)
+        try:
+            self._core.load()  # モデルタグは初回のみ DL される (espnet_model_zoo のキャッシュ)
+        except CoreEngineUnavailableError as e:
+            raise EngineUnavailableError(str(e)) from e
 
     def synthesize(self, text: str) -> SynthResult:
         self.prepare()
-        import numpy as np
-
         t0 = time.perf_counter()
-        out = self._tts(text)
-        wav = out["wav"]  # torch.Tensor (float)
+        try:
+            pcm, sample_rate = self._core.synthesize(text)
+        except CoreEngineUnavailableError as e:
+            raise EngineUnavailableError(str(e)) from e
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        arr = wav.detach().cpu().numpy()
-        pcm = (np.clip(arr, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
-        sample_rate = int(self._tts.fs)
         return SynthResult(
             pcm=pcm,
             sample_rate=sample_rate,
