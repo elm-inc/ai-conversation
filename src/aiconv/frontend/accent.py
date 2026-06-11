@@ -41,6 +41,11 @@ from pathlib import Path
 ENV_DICT_DIR = "AICONV_ACCENT_DICT_DIR"  # ユーザー辞書ディレクトリの上書き
 ENV_RUN_MARINE = "AICONV_RUN_MARINE"  # "1"/"true"/"on" で marine を既定有効化
 
+# dict_sync (テーマ keyterms → 辞書候補) の自動生成ファイル。読みが未検証 (needs-review) の
+# ため load_user_dict() のロード対象外。人間レビューで project_words.csv へ昇格して初めて
+# 発話に反映される (運用: data/accent_dict/README.md)。
+PENDING_DICT_FILENAME = "auto_pending.csv"
+
 _DICT_RELPATH = Path("data") / "accent_dict"
 
 _LBL_PHONE = re.compile(r"\-(.+?)\+")
@@ -154,6 +159,8 @@ def load_user_dict(dict_dir: Path | None = None) -> list[Path]:
 
     戻り値は適用した CSV のリスト (辞書ディレクトリ/CSV が無ければ空)。
     コンパイル先はプロセス毎の一時ディレクトリ (リポジトリにバイナリを残さない)。
+    自動生成の auto_pending.csv (PENDING_DICT_FILENAME) は **適用しない**
+    (needs-review。人間レビューで project_words.csv へ昇格するまで発話に反映させない)。
     """
     global _user_dict_applied, _compiled_dir
     import pyopenjtalk
@@ -163,7 +170,9 @@ def load_user_dict(dict_dir: Path | None = None) -> list[Path]:
     if dict_dir is None or not dict_dir.is_dir():
         _user_dict_applied = False
         return []
-    csvs = sorted(p for p in dict_dir.glob("*.csv") if p.is_file())
+    csvs = sorted(
+        p for p in dict_dir.glob("*.csv") if p.is_file() and p.name != PENDING_DICT_FILENAME
+    )
     if not csvs:
         _user_dict_applied = False
         return []

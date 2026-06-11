@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from aiconv.frontend import (
@@ -82,6 +84,50 @@ def test_normalize_date_and_range() -> None:
     assert normalize("13/45は変換しない。") == "13/45は変換しない。"  # 月日として不正
     assert normalize("3〜4人で行く。") == "3から4人で行く。"
     assert normalize("3-4人で行く。") == "3から4人で行く。"
+
+
+def test_normalize_md_date() -> None:
+    # 単独 M/D 日付 (日>10 なら分数より日付が圧倒的に多い)
+    assert normalize("来週の6/11に会おうよ。") == "来週の6月11日に会おうよ。"
+    assert normalize("12/5は発売日。") == "12月5日は発売日。"  # 月>日 は分数として不自然
+    # 分数と曖昧な領域 (月<日 かつ 日≤10) は安全側で未変換 (docstring に記録)
+    assert normalize("ケーキを1/2に切る。") == "ケーキを1/2に切る。"
+    assert normalize("6/8はどうかな。") == "6/8はどうかな。"
+    # ゼロ埋め・曜日付きは日付確定
+    assert normalize("06/08締切。") == "6月8日締切。"
+    assert normalize("6/8(土)に集合ね。") == "6月8日土曜日に集合ね。"
+    # YYYY/MM/DD の内部 (06/11) を二重変換しない
+    assert normalize("2026/06/11に会おう。") == "2026年6月11日に会おう。"
+
+
+def test_normalize_multiply() -> None:
+    assert normalize("3×4は12だよ。") == "3かける4は12だよ。"
+    assert normalize("3 * 4も12。") == "3かける4も12。"  # 従来は * を掃除して無音だった
+    assert normalize("2✕3と2✖3。") == "2かける3と2かける3。"  # 絵文字除去より先に読み替え
+    assert normalize("*強調*は読まない。") == "強調は読まない。"  # 数字に挟まれない * は従来通り
+
+
+def test_normalize_phone_number() -> None:
+    assert normalize("電話番号は03-1234-5678です。") == (
+        "電話番号はゼロサンのイチニーサンヨンのゴーロクナナハチです。"
+    )
+    assert normalize("090-1234-5678にかけて。") == (
+        "ゼロキューゼロのイチニーサンヨンのゴーロクナナハチにかけて。"
+    )
+    assert normalize("0120-444-444は無料。") == (
+        "ゼロイチニーゼロのヨンヨンヨンのヨンヨンヨンは無料。"
+    )
+    # 先頭 0 なし・2 区切りでないものは電話番号と確信できないため未変換 (docstring に記録)
+    assert normalize("1234-5678は変換しない。") == "1234-5678は変換しない。"
+    assert normalize("3-4人で行く。") == "3から4人で行く。"  # 範囲読みは壊さない
+
+
+def test_normalize_known_abbreviations() -> None:
+    # 英略語の追加分 (SNS/URL/iPhone/Google/Netflix/API)
+    assert normalize("SNSでiPhoneの新作URLが流れてきた。") == (
+        "エスエヌエスでアイフォンの新作ユーアールエルが流れてきた。"
+    )
+    assert normalize("GoogleとNetflixのAPI。") == "グーグルとネットフリックスのエーピーアイ。"
 
 
 def test_normalize_units_currency_math() -> None:
@@ -197,3 +243,102 @@ def test_marine_graceful_fallback() -> None:
 def test_mora_count() -> None:
     assert mora_count_kana("ミヤザキハヤオ") == 7
     assert mora_count_kana("チャットジーピーティー") == 9  # 拗音/長音の扱い
+
+
+# ---------------------------------------------------------------------------
+# dict_sync: テーマ keyterms → アクセント辞書候補 (auto_pending.csv, needs-review)
+# ---------------------------------------------------------------------------
+
+# 既存 curated 辞書相当 (重複排除の検証用に 宮崎駿 を含める)
+_CURATED_ROW = (
+    "宮崎駿,,,8609,名詞,固有名詞,人名,一般,*,*,宮崎駿,ミヤザキハヤオ,ミヤザキハヤオ,5/7,*"
+)
+
+
+def test_parse_keyterms() -> None:
+    from aiconv.frontend.dict_sync import parse_keyterms
+
+    # bot.py spec.keyterms 形式 (カンマ区切り文字列) とリストの両対応・順序保持・重複排除
+    assert parse_keyterms("宮崎駿, スタジオジブリ ,宮崎駿,") == ["宮崎駿", "スタジオジブリ"]
+    assert parse_keyterms(["大谷翔平", " 大谷翔平 ", ""]) == ["大谷翔平"]
+
+
+def test_dict_candidate_csv_row() -> None:
+    from aiconv.frontend.dict_sync import DictCandidate
+
+    row = DictCandidate(
+        surface="大谷翔平", reading="オオタニショウヘイ", pron="オータニショーヘー",
+        accent=5, mora_count=8,
+    ).csv_row()
+    cols = row.split(",")
+    assert len(cols) == 15, "NAIST-JDIC 15 カラム (project_words.csv へそのまま昇格できる形)"
+    assert cols[0] == cols[10] == "大谷翔平"  # 表層形 = 原形
+    assert cols[4:8] == ["名詞", "固有名詞", "一般", "*"]
+    assert cols[11] == "オオタニショウヘイ" and cols[12] == "オータニショーヘー"
+    assert cols[13] == "5/8"  # アクセント核/モーラ数
+
+
+@requires_pyopenjtalk
+def test_candidate_for_combined_accent() -> None:
+    """複数アクセント句 (姓+名) は結合モーラ位置の最初の非平板核に換算される。"""
+    from aiconv.frontend.dict_sync import candidate_for
+
+    c = candidate_for("大谷翔平")  # 素通し: オータニ[0](4) + ショーヘー[1](4)
+    assert c.surface == "大谷翔平"
+    assert c.reading == "オオタニショウヘイ"  # 読み (カナ綴り)
+    assert c.pron == "オータニショーヘー"  # 発音 (長音表記)
+    assert c.mora_count == 8
+    assert c.accent == 4 + 1  # 後句の核 1 を結合位置 5 に換算
+
+
+@requires_pyopenjtalk
+def test_candidate_for_rejects_non_dictionary_terms() -> None:
+    from aiconv.frontend.dict_sync import candidate_for
+
+    with pytest.raises(ValueError, match="KNOWN_WORDS"):
+        candidate_for("GPU")  # 英字表層は L0 担当 (MeCab 辞書は ASCII が不安定)
+    with pytest.raises(ValueError, match="空"):
+        candidate_for("🎉")  # L0 正規化で消える
+    # L0 既知語はカタカナ化された表層で候補になる (実行時も L0 正規化後に L1 へ渡るため)
+    assert candidate_for("OpenAI").surface == "オープンエーアイ"
+
+
+@requires_pyopenjtalk
+def test_sync_keyterms_appends_and_dedupes(tmp_path: Path) -> None:
+    """新規候補のみ auto_pending.csv へ追記し、再実行は冪等 (受け入れ条件 1)。"""
+    from aiconv.frontend import PENDING_DICT_FILENAME, sync_keyterms  # 遅延 export 経由
+
+    dict_dir = tmp_path
+    (dict_dir / "project_words.csv").write_text(_CURATED_ROW + "\n", encoding="utf-8")
+
+    result = sync_keyterms("宮崎駿, スタジオジブリ, 大谷翔平, GPU", dict_dir=dict_dir)
+    assert [c.surface for c in result.added] == ["スタジオジブリ", "大谷翔平"]
+    assert result.skipped_existing == ("宮崎駿",)  # curated 辞書と表層重複
+    assert [t for t, _ in result.skipped_invalid] == ["GPU"]
+    pending = dict_dir / PENDING_DICT_FILENAME
+    assert result.pending_path == pending
+    lines = pending.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2 and all(len(line.split(",")) == 15 for line in lines)
+
+    # 再実行 → 全てスキップ (冪等)。pending 内の表層とも重複排除される
+    again = sync_keyterms(["スタジオジブリ", "大谷翔平"], dict_dir=dict_dir)
+    assert again.added == ()
+    assert set(again.skipped_existing) == {"スタジオジブリ", "大谷翔平"}
+    assert pending.read_text(encoding="utf-8").splitlines() == lines
+
+
+@requires_pyopenjtalk
+def test_pending_csv_not_loaded_as_user_dict(tmp_path: Path) -> None:
+    """auto_pending.csv (needs-review) は load_user_dict のロード対象外 (隔離)。"""
+    from aiconv.frontend import PENDING_DICT_FILENAME, load_user_dict, reset_user_dict
+
+    dict_dir = tmp_path
+    (dict_dir / "project_words.csv").write_text(_CURATED_ROW + "\n", encoding="utf-8")
+    wrong = "大谷翔平,,,1,名詞,固有名詞,一般,*,*,*,大谷翔平,ダメヨミ,ダメヨミ,0/4,*"
+    (dict_dir / PENDING_DICT_FILENAME).write_text(wrong + "\n", encoding="utf-8")
+    try:
+        applied = load_user_dict(dict_dir)
+        assert [p.name for p in applied] == ["project_words.csv"]  # pending は適用されない
+        assert _reading("大谷翔平が打った。").startswith("オータニショーヘー")
+    finally:
+        reset_user_dict()  # 後続テストは既定辞書 (data/accent_dict) を遅延再適用する

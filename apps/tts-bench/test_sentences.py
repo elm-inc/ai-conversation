@@ -18,6 +18,10 @@
   未了**。修正する場合はコメントに根拠を残すこと。proper_noun / normalization カテゴリは
   読み崩れ自体が論点のため expected_accent は設定せず、expected_reading を正解とする
   (現状の pyopenjtalk 素通しでは fail するものを含む = L0 正規化が必要な根拠)。
+
+⚠ note に「意図的 NG (baseline)」と書かれた文は現状 fail のまま残す難ケース
+  (例: pn-yonezu は dict_sync → 人間レビュー昇格運用で解消する想定。昇格には読み根拠の
+  人間レビューが必要なため、自動では green にしない)。
 """
 
 from __future__ import annotations
@@ -94,6 +98,38 @@ SENTENCES: tuple[TestSentence, ...] = (
         expected_accent="イマ[1] イマデ[2] テレビヲ[1] ミテル[1]",
         note="今=イ↓マ(1) / 居間=イマ↓(尾高2)",
     ),
+    TestSentence(
+        id="mp-kami-god-paper",
+        text="神に祈ってから、紙に書いた。",
+        category=Category.MINIMAL_PAIR,
+        expected_reading="カミニイノッテカラカミニカイタ",
+        expected_accent="カミニ[1] イノッテカラ[2] カミニ[2] カイタ[1]",
+        note="神=カ↓ミ(1) / 紙=カミ↓(尾高2→ニで核実現)。髪(尾高2)は mp-kami-hair",
+    ),
+    TestSentence(
+        id="mp-kami-hair",
+        text="髪を切ってもらった。",
+        category=Category.MINIMAL_PAIR,
+        expected_reading="カミヲキッテモラッタ",
+        expected_accent="カミヲ[2] キッテモラッタ[1]",
+        note="髪=カミ↓(尾高2)。紙と同型で神(1)と対立。切る=キ↓ル(1)",
+    ),
+    TestSentence(
+        id="mp-sake",
+        text="鮭をつまみに酒を飲む。",
+        category=Category.MINIMAL_PAIR,
+        expected_reading="サケヲツマミニサケヲノム",
+        expected_accent="サケヲ[1] ツマミニ[0] サケヲ[0] ノム[1]",
+        note="鮭=サ↓ケ(1) / 酒=サケ(平板0)。1文に両方入れて差を見る",
+    ),
+    TestSentence(
+        id="mp-umi",
+        text="海で泳いだら傷に膿が出た。",
+        category=Category.MINIMAL_PAIR,
+        expected_reading="ウミデオヨイダラキズニウミガデタ",
+        expected_accent="ウミデ[1] オヨイダラ[2] キズニ[0] ウミガ[2] デタ[1]",
+        note="海=ウ↓ミ(1) / 膿=ウミ↓(尾高2)",
+    ),
     # --- 固有名詞・作品名・人名 (読み崩れ検出。expected_reading が正解) ---
     TestSentence(
         id="pn-shinkai",
@@ -115,6 +151,38 @@ SENTENCES: tuple[TestSentence, ...] = (
         category=Category.PROPER_NOUN,
         expected_reading="オータニショーヘーガホームランヲウッタ",
         note="人名+外来語",
+    ),
+    TestSentence(
+        id="pn-sapporo-hakata",
+        text="札幌から博多まで新幹線で行った。",
+        category=Category.PROPER_NOUN,
+        expected_reading="サッポロカラハカタマデシンカンセンデイッタ",
+        note="地名 2 連 (これは素通しで正しく読める)",
+    ),
+    TestSentence(
+        id="pn-murakami",
+        text="村上春樹の小説を読み返してる。",
+        category=Category.PROPER_NOUN,
+        expected_reading="ムラカミハルキノショーセツヲヨミカエシテル",
+        note="人名 (素通しで正読のため辞書登録しない — README「登録のコツ」)",
+    ),
+    TestSentence(
+        id="pn-nintendo",
+        text="任天堂の新作ゲームが楽しみだね。",
+        category=Category.PROPER_NOUN,
+        expected_reading="ニンテンドーノシンサクゲームガタノシミダネ",
+        note="社名",
+    ),
+    TestSentence(
+        id="pn-yonezu",
+        text="米津玄師の新曲、もう聴いた？",
+        category=Category.PROPER_NOUN,
+        expected_reading="ヨネズケンシノシンキョクモーキイタ",
+        note=(
+            "⚠ 意図的 NG (baseline): 素通しはヨネツ「ゲンシ」に崩れる。dict_sync の "
+            "auto_pending 候補→人間レビュー昇格 (README) の運用対象。昇格は読み根拠の"
+            "人間レビュー必須のため本リビジョンでは NG のまま残す"
+        ),
     ),
     # --- キャラ名 (あい/ゆう) を含む会話文 ---
     TestSentence(
@@ -192,5 +260,40 @@ SENTENCES: tuple[TestSentence, ...] = (
         category=Category.NORMALIZATION,
         expected_reading="ヤッターユーショーダスゴクナイ",
         note="感嘆符・絵文字。絵文字は読まない (無視) が正",
+    ),
+    TestSentence(
+        id="nm-date-md",
+        text="来週の6/11に会おうよ。",
+        category=Category.NORMALIZATION,
+        expected_reading="ライシューノロクガツジューイチニチニアオーヨ",
+        note="単独 M/D 日付 (6/11→6月11日)。分数曖昧域 (6/8 等) は変換しない (L0 docstring)",
+    ),
+    TestSentence(
+        id="nm-multiply",
+        text="3×4は12だよ。",
+        category=Category.NORMALIZATION,
+        expected_reading="サンカケルヨンワジューニダヨ",
+        note="乗算記号 (×/*) → かける。素通しは × を読まず崩れる",
+    ),
+    TestSentence(
+        id="nm-percent",
+        text="バッテリーが残り20%だ。",
+        category=Category.NORMALIZATION,
+        expected_reading="バッテリーガノコリニジュッパーセントダ",
+        note="百分率。20% → 20パーセント (促音便ニジュッパーセントまで NAIST-JDIC が処理)",
+    ),
+    TestSentence(
+        id="nm-phone",
+        text="電話番号は03-1234-5678です。",
+        category=Category.NORMALIZATION,
+        expected_reading="デンワバンゴーワゼロサンノイチニーサンヨンノゴーロクナナハチデス",
+        note="電話番号は数字読み (NTT 風: 2=ニー, 5=ゴー)。素通しは1234をセン...と読む",
+    ),
+    TestSentence(
+        id="nm-abbrev",
+        text="SNSでiPhoneの新作URLが流れてきた。",
+        category=Category.NORMALIZATION,
+        expected_reading="エスエヌエスデアイフォンノシンサクユーアールエルガナガレテキタ",
+        note="英略語の追加分 (SNS/iPhone/URL は L0 KNOWN_WORDS)",
     ),
 )

@@ -21,7 +21,8 @@ from test_sentences import SENTENCES, Category  # noqa: E402
 def test_sentence_set_wellformed() -> None:
     ids = [s.id for s in SENTENCES]
     assert len(ids) == len(set(ids)), "id が重複している"
-    assert 12 <= len(SENTENCES) <= 20
+    # 下限 = カテゴリ網羅の担保、上限 = 実合成ベンチが現実的な時間で回るサイズ
+    assert 12 <= len(SENTENCES) <= 45
     assert {s.category for s in SENTENCES} == set(Category), "全カテゴリを網羅すること"
     for s in SENTENCES:
         assert s.text.strip()
