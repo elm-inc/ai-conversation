@@ -9,6 +9,10 @@ stereo 録音する。STT 誤認識・ストリーミング継ぎ目の両方を
 
 judge は record_conversation と同じログ形式 (<base>-{a,b}.pcm.log) を吐くのでそのまま採点可能。
 注: 実音声パイプライン(STT 含む)の回帰検証は従来の record_conversation を使う。
+
+--tts espnet / voicevox でセルフホスト新アダプタ (src/aiconv/adapters/tts_{espnet,voicevox}.py,
+ports.TTSProvider 経由, L0 正規化込み) でも録音できる (AIC-9 P2)。新アダプタの出力は core 規約の
+16kHz PCM のため、トラック組み立て時に SR (24kHz) へアップサンプルする (帯域は 16kHz 相当)。
 """
 
 from __future__ import annotations
@@ -73,6 +77,44 @@ def _eleven_pcm(text: str, voice: str, model: str, key: str) -> bytes:
     return _post(req, 90)
 
 
+def _make_local_adapters(kind: str, vv_speakers: str) -> list:
+    """--tts espnet/voicevox 用の TTSProvider アダプタを話者 A/B 分つくる。"""
+    if kind == "espnet":
+        from aiconv.adapters.tts_espnet import EspnetTTS
+
+        adapter = EspnetTTS()
+        return [adapter, adapter]  # JSUT 単一話者モデル (話者分離は ESPnet 話者適応後の課題)
+    if kind == "voicevox":
+        from aiconv.adapters.tts_voicevox import VoicevoxTTS
+
+        ids = [int(x) for x in vv_speakers.split(",") if x.strip()]
+        if len(ids) != 2:
+            raise SystemExit("--vv-speakers は A,B の 2 つの話者 id (例 3,2)")
+        return [VoicevoxTTS(speaker=ids[0]), VoicevoxTTS(speaker=ids[1])]
+    raise SystemExit(f"未知の --tts: {kind}")
+
+
+def _local_tts_pcm(adapter, text: str) -> bytes:
+    """新アダプタ (ports.TTSProvider) で一括合成し、SR の mono PCM へ整える。
+
+    アダプタ出力は core 規約の 16kHz mono PCM (合成前の L0 正規化もアダプタ側で実施)。
+    """
+    import asyncio
+
+    from aiconv.adapters._engines.resample import resample_pcm16
+
+    async def _collect() -> bytes:
+        async def chunks():
+            yield text
+
+        buf = bytearray()
+        async for frame in adapter.synthesize(chunks()):
+            buf += frame.data
+        return bytes(buf)
+
+    return resample_pcm16(asyncio.run(_collect()), 16_000, SR)
+
+
 def _system_for(sp: dict, theme: str, lang: str, brief: str) -> str:
     persona = sp["persona"] or AI_PERSONA
     parts = [persona]
@@ -102,9 +144,18 @@ def main() -> None:
     ap.add_argument("--out-dir", default="/tmp")
     ap.add_argument("--no-enrich", action="store_true")
     ap.add_argument("--model", help="LLM 上書き (例 claude-sonnet-4-6)。既定は preset")
+    ap.add_argument(
+        "--tts", default="elevenlabs", choices=("elevenlabs", "espnet", "voicevox"),
+        help="TTS エンジン (espnet/voicevox はセルフホスト新アダプタ TTSProvider 経由)",
+    )
+    ap.add_argument(
+        "--vv-speakers", default="3,2",
+        help="--tts voicevox の話者 id ペア A,B (既定 3,2。ENGINE の /speakers で確認)",
+    )
     args = ap.parse_args()
 
-    for t in ("anthropic", "elevenlabs"):
+    needed = ["anthropic"] + (["elevenlabs"] if args.tts == "elevenlabs" else [])
+    for t in needed:
         if not _tok(t):
             raise SystemExit(f"~/.{t}_token が無い")
     akey, ekey = _tok("anthropic"), _tok("elevenlabs")
@@ -148,11 +199,17 @@ def main() -> None:
         print(f"  {sp['name']}: {line}")
 
     # --- TTS フル品質生成 + 時刻整列で stereo 組み立て ---
-    print("[tts] REST でフル品質生成中...")
+    print(f"[tts] {args.tts} でフル品質生成中...")
+    adapters = None if args.tts == "elevenlabs" else _make_local_adapters(
+        args.tts, args.vv_speakers
+    )
     segments = []  # (who_idx, pcm)
     for turn, (_who, text) in enumerate(history):
         idx = turn % 2
-        pcm = _eleven_pcm(text, spk[idx]["voice"], tts_model, ekey)
+        if adapters is None:
+            pcm = _eleven_pcm(text, spk[idx]["voice"], tts_model, ekey)
+        else:
+            pcm = _local_tts_pcm(adapters[idx], text)
         segments.append((idx, pcm))
 
     base_t = datetime.now()
