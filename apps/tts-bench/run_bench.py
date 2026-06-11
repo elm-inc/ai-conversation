@@ -24,18 +24,19 @@ from pathlib import Path
 from typing import Any
 
 import metrics
-from accent_check import (
-    AccentCheck,
-    check_sentence,
-    format_phrases,
-    frontend_available,
-    predict_accent,
-    predicted_reading,
-)
+from accent_check import AccentCheck, check_sentence
 from engines import ENGINE_NAMES, EngineUnavailableError, create_engine
 from engines.base import Engine
 from report import BenchRow, write_csv, write_report
 from test_sentences import SENTENCES, TestSentence
+
+from aiconv.frontend import (
+    format_phrases,
+    frontend_available,
+    normalize,
+    predict_accent,
+    predicted_reading,
+)
 
 _WARMUP_TEXT = "ウォームアップです。"
 
@@ -87,7 +88,8 @@ def _bench_engine(
     for s in sentences:
         metrics.vram_reset()
         try:
-            r = engine.synthesize(s.text)
+            # L0 正規化を通して合成する (数字/英単語/記号の読み崩れをエンジン非依存で防ぐ)
+            r = engine.synthesize(normalize(s.text))
         except EngineUnavailableError as e:
             # エンジンごと打ち切り (部分結果は保持し、状態に理由を残す)
             print(f"[{engine.name}] 計測中断: {e}")
@@ -142,7 +144,7 @@ def _run_judge(
 
     items: list[dict[str, str]] = []
     for s in sentences:
-        phrases = predict_accent(s.text)
+        phrases = predict_accent(normalize(s.text))
         items.append(
             {
                 "id": s.id,

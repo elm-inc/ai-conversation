@@ -41,7 +41,7 @@ def test_expected_accent_parseable() -> None:
 
 def test_accent_predict_minimal_pair() -> None:
     pytest.importorskip("pyopenjtalk")
-    from accent_check import predict_accent
+    from aiconv.frontend import predict_accent
 
     # 雨 (頭高1) / 飴 (平板0) の最小対立がフロントエンドで区別されること
     rain = predict_accent("雨が降る。")

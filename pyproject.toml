@@ -16,6 +16,16 @@ providers = [
 transport = [
     "pipecat-ai>=1.0",
 ]
+# --- 日本語 TTS フロントエンド L0/L1 (src/aiconv/frontend, AIC-12 P1) ---
+# L0 (text_normalize) は依存なしで動く。L1 (accent) に pyopenjtalk-plus が必要。
+frontend = [
+    # G2P + アクセント + ユーザー辞書。MIT (商用クリーン)、NAIST-JDIC 同梱
+    "pyopenjtalk-plus>=0.4",
+]
+frontend-marine = [
+    # marine (DNN アクセント推定, Apache-2.0)。AICONV_RUN_MARINE=1 で有効化
+    "pyopenjtalk-plus[marine]>=0.4",
+]
 # --- apps/tts-bench (日本語 TTS エンジン比較ハーネス, AIC-8 P0) ---
 # AGPL 依存 (Style-Bert-VITS2 / AivisSpeech) は入れない (設計 japanese-tts-optimization)。
 tts-bench = [
@@ -41,6 +51,8 @@ tts-bench-kokoro = [
 # accent_check は動く)。
 conflicts = [
     [{ extra = "tts-bench" }, { extra = "tts-bench-kokoro" }],
+    [{ extra = "frontend" }, { extra = "tts-bench-kokoro" }],
+    [{ extra = "frontend-marine" }, { extra = "tts-bench-kokoro" }],
 ]
 
 [dependency-groups]
