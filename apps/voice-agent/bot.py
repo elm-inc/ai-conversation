@@ -45,6 +45,7 @@ from pipecat.runner.types import DailyRunnerArguments, RunnerArguments
 from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.services.deepgram.stt import DeepgramSTTService, LiveOptions
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+from pipecat.services.tts_service import TTSService
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.daily.transport import DailyParams, DailyTransport
 from pipecat.workers.runner import WorkerRunner
@@ -68,6 +69,22 @@ def _env_float(name: str, default: float) -> float:
 TTS_STABILITY = _env_float("TTS_STABILITY", 0.5)
 TTS_SIMILARITY = _env_float("TTS_SIMILARITY", 0.8)
 TTS_SPEAKER_BOOST = os.getenv("TTS_SPEAKER_BOOST", "1") != "0"
+
+
+def _env_int_or_none(name: str) -> int | None:
+    v = os.getenv(name)
+    return int(v) if v else None
+
+
+# --- TTS エンジン切替 (P3: AivisSpeech)。既定 "elevenlabs" = 従来経路と完全一致 (本番無影響)。
+# "aivis" で AivisSpeech (VOICEVOX 互換ローカル HTTP — LGPL を外部プロセス分離で利用) を使い、
+# エラー/タイムアウト時は ElevenLabs REST に自動フォールバックする (aivis_tts.AivisTTSService)。
+TTS_ENGINE = (os.getenv("TTS_ENGINE") or "elevenlabs").strip().lower()
+AIVIS_URL = os.getenv("AIVIS_URL") or "http://127.0.0.1:10101"
+# 話者 (style id)。あい/ゆう で別話者を渡せる (例: まお=888753760, コハク=1878365376)。
+# 未設定は aivis_tts.DEFAULT_SPEAKER。AIVIS_SPEAKER はあい (単体ボット) の別名既定。
+AIVIS_SPEAKER_AI = _env_int_or_none("AIVIS_SPEAKER_AI") or _env_int_or_none("AIVIS_SPEAKER")
+AIVIS_SPEAKER_YUU = _env_int_or_none("AIVIS_SPEAKER_YUU")
 
 # 一貫した会話人格「あい」。音声で読み上げる前提 (絵文字/記号/箇条書きを出さない)。
 PERSONA = os.getenv("PERSONA_PROMPT") or (
@@ -304,6 +321,7 @@ class AgentSpec:
     # (INCOMPLETE 連発→相手がまだ話すと待ち続け数秒〜十数秒の空き) するため、デュオは固定無音に倒す。
     speech_timeout_stop: float | None = None
     max_tokens: int | None = None  # LLM 応答長の上限。デュオは短く絞って1ターンを短文化
+    aivis_speaker: int | None = None  # TTS_ENGINE=aivis の style id (None=aivis_tts 既定)
     turn_probe: bool = False  # [診断] ターン遅延プローブを pipeline に挟む
     echo_phrase: str | None = None  # [実験] 設定時、相手停止に固定フレーズ応答
     echo_after_llm: bool = False  # [実験] LLM を生成させてから本文を捨てて echo_phrase を発話
@@ -322,6 +340,45 @@ def _default_spec() -> AgentSpec:
         vad_stop_secs=VAD_STOP_SECS,
         turn_min_words=TURN_MIN_WORDS,
         filler_enabled=FILLER_ENABLED,
+        aivis_speaker=AIVIS_SPEAKER_AI,
+    )
+
+
+def _build_tts(spec: AgentSpec) -> TTSService:
+    """spec から TTS を構築する factory。既定 (TTS_ENGINE=elevenlabs) は従来構成と完全一致。
+
+    TTS_ENGINE=aivis: AivisSpeech (ローカル HTTP) + ElevenLabs フォールバック。構築自体に
+    失敗した場合 (aivis_tts/aiconv が無いイメージ等) も ElevenLabs に倒し、無音にしない。
+    """
+    if TTS_ENGINE == "aivis":
+        try:
+            from aivis_tts import AivisTTSService  # 遅延 import (既定経路に影響させない)
+
+            tts = AivisTTSService(
+                base_url=AIVIS_URL,
+                speaker=spec.aivis_speaker,
+                fallback_api_key=os.getenv("ELEVENLABS_API_KEY"),
+                fallback_voice_id=spec.voice_id,
+                fallback_model=TTS_MODEL,
+            )
+            logger.info(
+                "[tts] engine=aivis url={} speaker={} fallback=elevenlabs ({})",
+                tts.base_url,
+                tts.speaker,
+                spec.name,
+            )
+            return tts
+        except Exception as e:  # noqa: BLE001 — aivis 構築不可は ElevenLabs に倒す (止めない)
+            logger.error("[tts] AivisTTSService 構築失敗 ({}); ElevenLabs に切替", e)
+    return ElevenLabsTTSService(
+        api_key=os.getenv("ELEVENLABS_API_KEY"),
+        model=TTS_MODEL,
+        settings=ElevenLabsTTSService.Settings(
+            voice=spec.voice_id,
+            stability=TTS_STABILITY,
+            similarity_boost=TTS_SIMILARITY,
+            use_speaker_boost=TTS_SPEAKER_BOOST,
+        ),
     )
 
 
@@ -352,16 +409,7 @@ def _build_worker(transport: BaseTransport, spec: AgentSpec) -> PipelineWorker:
         live_options=LiveOptions(**live_kwargs),
     )
 
-    tts = ElevenLabsTTSService(
-        api_key=os.getenv("ELEVENLABS_API_KEY"),
-        model=TTS_MODEL,
-        settings=ElevenLabsTTSService.Settings(
-            voice=spec.voice_id,
-            stability=TTS_STABILITY,
-            similarity_boost=TTS_SIMILARITY,
-            use_speaker_boost=TTS_SPEAKER_BOOST,
-        ),
-    )
+    tts = _build_tts(spec)
 
     llm_params = (
         AnthropicLLMService.InputParams(max_tokens=spec.max_tokens)
@@ -837,9 +885,11 @@ def _live_specs(
                   speech_timeout_stop=LIVE_SPEECH_TIMEOUT, max_tokens=LIVE_MAX_TOKENS,
                   turn_probe=True, keyterms=kt)
     ai = AgentSpec(name="あい", system_instruction=ai_sys,
-                   voice_id=os.getenv("ELEVENLABS_VOICE_ID") or "", **common)
+                   voice_id=os.getenv("ELEVENLABS_VOICE_ID") or "",
+                   aivis_speaker=AIVIS_SPEAKER_AI, **common)
     yuu = AgentSpec(name="ゆう", system_instruction=yuu_sys, voice_id=DUO_VOICE_B,
-                    kickoff_on_join=True, kickoff_prompt=kickoff, **common)
+                    kickoff_on_join=True, kickoff_prompt=kickoff,
+                    aivis_speaker=AIVIS_SPEAKER_YUU, **common)
     if echo or echo_llm:
         # 実験: あいが駆動 (口火を切り会話を続ける)、ゆうは固定「いいね」エコー。
         ai.kickoff_on_join = True
