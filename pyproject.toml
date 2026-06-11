@@ -16,6 +16,32 @@ providers = [
 transport = [
     "pipecat-ai>=1.0",
 ]
+# --- apps/tts-bench (日本語 TTS エンジン比較ハーネス, AIC-8 P0) ---
+# AGPL 依存 (Style-Bert-VITS2 / AivisSpeech) は入れない (設計 japanese-tts-optimization)。
+tts-bench = [
+    # アクセントチェック層 + ESPnet G2P。MIT (商用クリーン)、辞書同梱
+    "pyopenjtalk-plus>=0.4",
+]
+tts-bench-espnet = [
+    # Apache-2.0。モデルは espnet_model_zoo 経由で初回 DL (import 時はロードしない)
+    "espnet>=202412",
+    "espnet-model-zoo>=0.1.7",
+    "torch>=2.1",
+]
+tts-bench-kokoro = [
+    # Apache-2.0 (重みも)。misaki[ja] が日本語 G2P
+    "kokoro>=0.9.4",
+    "misaki[ja]>=0.9.4",
+]
+# VOICEVOX は HTTP (audio_query→synthesis) のため追加 python 依存なし
+
+[tool.uv]
+# misaki[ja] は本家 pyopenjtalk に依存し、pyopenjtalk-plus と同一モジュール名を提供して
+# ファイル衝突するため同時インストールを禁止する (kokoro 環境でも本家 pyopenjtalk で
+# accent_check は動く)。
+conflicts = [
+    [{ extra = "tts-bench" }, { extra = "tts-bench-kokoro" }],
+]
 
 [dependency-groups]
 dev = [
@@ -51,5 +77,17 @@ mypy_path = "src"
 
 # 実プロバイダ SDK は optional extras。未導入環境でも型チェックが通るようにする。
 [[tool.mypy.overrides]]
-module = ["anthropic.*", "elevenlabs.*", "deepgram.*"]
+module = [
+    "anthropic.*",
+    "elevenlabs.*",
+    "deepgram.*",
+    # apps/tts-bench (uv run mypy apps/tts-bench で個別チェック) の optional 依存
+    "pyopenjtalk.*",
+    "espnet2.*",
+    "espnet_model_zoo.*",
+    "torch.*",
+    "kokoro.*",
+    "misaki.*",
+    "numpy.*",
+]
 ignore_missing_imports = true
