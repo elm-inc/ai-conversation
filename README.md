@@ -24,6 +24,7 @@ apps/conversation-tester/# AI-to-AI conversation subsystem (test harness + conte
   director.py            #   cloud あい + local interlocutor over Daily (real audio path)
   record_conversation.py #   dual-local high-quality recording (presets, themes, enrichment)
   record_text.py         #   text-level conversation (no STT, REST TTS) — highest coherence
+  live_debate.py         #   AivisSpeech real-time reactive debate (2 experts, unscripted)
   judge.py               #   AI judge: rubric scoring of a recorded conversation
   presets.py             #   characters / languages / themes (single source)
 docs/                    # ADRs, architecture, design
@@ -45,6 +46,9 @@ cd apps/conversation-tester
 uv run python record_conversation.py --preset ja --theme "おすすめの映画"   # real audio path (with STT)
 uv run python record_text.py        --preset en --theme "favorite movies"  # text-level (no STT, cleanest)
 uv run python judge.py                                                      # score the latest recording
+
+# Real-time reactive AI debate via AivisSpeech (needs AivisSpeech engine on :10101 + ~/.anthropic_token)
+uv run python live_debate.py --theme "生成AIは人間の創造性を拡張するか" --turns 8  # each turn is generated after hearing the last
 ```
 
 ## Two recording modes
@@ -86,6 +90,7 @@ apps/conversation-tester/# AI 同士会話サブシステム (テストハーネ
   director.py            #   cloud あい + ローカル対話相手を Daily で同室 (実音声パス)
   record_conversation.py #   dual-local 高品質録音 (presets/テーマ/テーマ展開)
   record_text.py         #   テキストレベル会話 (STT なし, REST TTS) — 最も整合性が高い
+  live_debate.py         #   AivisSpeech リアルタイム即興討論 (専門家2体, 台本なし・発話駆動)
   judge.py               #   AI judge: 録音会話のルーブリック採点
   presets.py             #   キャラ / 言語 / テーマ (単一ソース)
 docs/                    # ADR / architecture / design
@@ -107,6 +112,9 @@ cd apps/conversation-tester
 uv run python record_conversation.py --preset ja --theme "おすすめの映画"   # 実音声パス (STT あり)
 uv run python record_text.py        --preset en --theme "favorite movies"  # テキストレベル (STT なし, 最もクリーン)
 uv run python judge.py                                                      # 直近の録音を採点
+
+# AivisSpeech によるリアルタイム即興討論 (AivisSpeech Engine :10101 と ~/.anthropic_token が必要)
+uv run python live_debate.py --theme "生成AIは人間の創造性を拡張するか" --turns 8  # 相手の発話を受けてから応答を生成・発声
 ```
 
 ## 2 つの録音モード
